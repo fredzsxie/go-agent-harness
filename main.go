@@ -7,13 +7,13 @@ import (
 	"os"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-
 	"go-agent-harness/config"
+	"go-agent-harness/loop"
+	"go-agent-harness/tools"
 )
 
 func main() {
+	// 读取本地 .env，方便开发时注入 Anthropic 配置。
 	loadEnvFile(".env")
 
 	cfg := config.LLMConfig{
@@ -30,30 +30,42 @@ func main() {
 	if cfg.APIKey == "" {
 		panic("ANTHROPIC_API_KEY is required")
 	}
-	fmt.Println(os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("ANTHROPIC_API_KEY"))
 
-	client := anthropic.NewClient(
-		option.WithBaseURL(cfg.BaseURL),
-		option.WithAPIKey(cfg.APIKey),
-	)
+	registry := tools.NewRegistry()
+	registry.Register("bash", tools.RunBash)
 
-	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock("你现在使用的是什么模型？")),
-	}
+	runner := loop.NewRunner(cfg, registry)
+	scanner := bufio.NewScanner(os.Stdin)
 
-	resp, err := client.Messages.New(context.Background(), anthropic.MessageNewParams{
-		MaxTokens: 2000,
-		Model:     cfg.Model,
-		Messages:  messages,
-	})
-	if err != nil {
-		panic(err)
-	}
+	// 保存整个会话的消息历史，保证多轮对话能继续上下文。
+	messages := make([]loop.Message, 0, 16)
 
-	for _, block := range resp.Content {
-		if text := block.AsText(); text.Text != "" {
-			fmt.Println(text.Text)
+	for {
+		fmt.Print("> ")
+		if !scanner.Scan() {
+			break
 		}
+
+		// 处理用户输入
+		prompt := strings.TrimSpace(scanner.Text())
+		if prompt == "" || prompt == "q" || prompt == "exit" {
+			break
+		}
+
+		// 获取并打印LLM处理结果
+		messages = append(messages, loop.Message{Role: loop.RoleUser, Content: prompt})
+		output, err := runner.Run(context.Background(), messages)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println(output)
+
+		// 追加至message list中
+		messages = append(messages, loop.Message{Role: loop.RoleAssistant, Content: output})
+	}
+
+	if err := scanner.Err(); err != nil {
+		panic(err)
 	}
 }
 
@@ -74,7 +86,7 @@ func loadEnvFile(path string) {
 		if !ok {
 			continue
 		}
-		if _, exists := os.LookupEnv(key); exists {
+		if _, exists := os.LookupEnv(strings.TrimSpace(key)); exists {
 			continue
 		}
 		_ = os.Setenv(strings.TrimSpace(key), strings.TrimSpace(value))

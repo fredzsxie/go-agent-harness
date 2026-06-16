@@ -3,5 +3,6 @@ bin/
 *.test
 coverage.out
 
-# Local env
+# Local
 .env
+CLAUDE.md
