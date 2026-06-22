@@ -31,8 +31,12 @@ func main() {
 		panic("ANTHROPIC_API_KEY is required")
 	}
 
-	registry := tools.NewRegistry()
+	registry := loop.NewRegistry()
 	registry.Register("bash", tools.RunBash)
+	registry.Register("read_file", tools.RunReadFile)
+	registry.Register("write_file", tools.RunWriteFile)
+	registry.Register("edit_file", tools.RunEditFile)
+	registry.Register("glob", tools.RunGlob)
 
 	runner := loop.NewRunner(cfg, registry)
 	scanner := bufio.NewScanner(os.Stdin)

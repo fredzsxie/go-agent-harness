@@ -10,7 +10,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"go-agent-harness/config"
-	"go-agent-harness/tools"
 )
 
 const systemPrompt = `You are Claude Code, Anthropic's official CLI for Claude.
@@ -24,10 +23,10 @@ Only use emojis if the user explicitly requests it.
 type Runner struct {
 	client   anthropic.Client
 	model    string
-	registry *tools.Registry
+	registry *Registry
 }
 
-func NewRunner(cfg config.LLMConfig, registry *tools.Registry) *Runner {
+func NewRunner(cfg config.LLMConfig, registry *Registry) *Runner {
 	return &Runner{
 		client: anthropic.NewClient(
 			option.WithBaseURL(cfg.BaseURL),
@@ -56,11 +55,13 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 			MaxTokens: 8000,
 			Model:     anthropic.Model(r.model),
 			Messages:  anthropicMessages,
-			Tools: []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{
-				Name:        "bash",
-				Description: anthropic.String("run a shell command"),
-				InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"command"}},
-			}}},
+			Tools: []anthropic.ToolUnionParam{
+				{OfTool: &anthropic.ToolParam{Name: "bash", Description: anthropic.String("run a shell command"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"command"}}}},
+				{OfTool: &anthropic.ToolParam{Name: "read_file", Description: anthropic.String("read file contents"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path"}}}},
+				{OfTool: &anthropic.ToolParam{Name: "write_file", Description: anthropic.String("write content to a file"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path", "content"}}}},
+				{OfTool: &anthropic.ToolParam{Name: "edit_file", Description: anthropic.String("replace exact text in a file once"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path", "old_text", "new_text"}}}},
+				{OfTool: &anthropic.ToolParam{Name: "glob", Description: anthropic.String("find files matching a glob pattern"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"pattern"}}}},
+			},
 			System: []anthropic.TextBlockParam{{Text: systemPrompt}},
 		}
 
@@ -81,15 +82,11 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 				if err != nil {
 					result = err.Error()
 				}
-				// fmt.Printf("[tool] result:\n%s\n", result)
+				fmt.Printf("[tool] result: %s\n\n", result)
+
 				anthropicMessages = append(anthropicMessages,
 					anthropic.NewAssistantMessage(anthropic.NewToolUseBlock(toolUse.ID, toolUse.Input, toolUse.Name)),
-					anthropic.MessageParam{
-						Role: anthropic.MessageParamRoleUser,
-						Content: []anthropic.ContentBlockParamUnion{
-							anthropic.NewToolResultBlock(toolUse.ID, result, false),
-						},
-					},
+					anthropic.MessageParam{Role: anthropic.MessageParamRoleUser, Content: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(toolUse.ID, result, false)}},
 				)
 				break
 			}
@@ -117,22 +114,6 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 	}
 
 	return "", fmt.Errorf("agent loop exceeded max iterations")
-}
-
-func parseToolInput(input any) map[string]any {
-	if input == nil {
-		return map[string]any{}
-	}
-	if m, ok := input.(map[string]any); ok {
-		return m
-	}
-	if raw, err := json.Marshal(input); err == nil {
-		var parsed map[string]any
-		if json.Unmarshal(raw, &parsed) == nil {
-			return parsed
-		}
-	}
-	return map[string]any{"command": fmt.Sprint(input)}
 }
 
 func prettyPrintValue(v any) string {
