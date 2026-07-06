@@ -7,25 +7,58 @@ import (
 )
 
 type Handler func(ctx context.Context, input any) (string, error)
+type Authorizer func(toolName string, args map[string]any) error
+
+type toolEntry struct {
+	spec    ToolSpec
+	handler Handler
+}
 
 type Registry struct {
-	handlers map[string]Handler
+	entries    map[string]toolEntry
+	order      []string
+	authorizer Authorizer
 }
 
 func NewRegistry() *Registry {
-	return &Registry{handlers: make(map[string]Handler)}
+	return &Registry{entries: make(map[string]toolEntry)}
 }
 
-func (r *Registry) Register(name string, handler Handler) {
-	r.handlers[name] = handler
+func (r *Registry) Register(spec ToolSpec, handler Handler) {
+	if spec.Name == "" {
+		panic("tool name is required")
+	}
+	if _, exists := r.entries[spec.Name]; !exists {
+		r.order = append(r.order, spec.Name)
+	}
+	r.entries[spec.Name] = toolEntry{spec: spec, handler: handler}
+}
+
+func (r *Registry) UseAuthorizer(authorizer Authorizer) {
+	r.authorizer = authorizer
+}
+
+func (r *Registry) Specs() []ToolSpec {
+	specs := make([]ToolSpec, 0, len(r.order))
+	for _, name := range r.order {
+		specs = append(specs, r.entries[name].spec)
+	}
+	return specs
 }
 
 func (r *Registry) Dispatch(ctx context.Context, name string, input any) (string, error) {
-	handler, ok := r.handlers[name]
+	entry, ok := r.entries[name]
 	if !ok {
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
-	return handler(ctx, input)
+
+	args := parseToolInput(input)
+	if r.authorizer != nil {
+		if err := r.authorizer(name, args); err != nil {
+			return "", err
+		}
+	}
+	return entry.handler(ctx, args)
 }
 
 func parseToolInput(input any) map[string]any {

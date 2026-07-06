@@ -55,14 +55,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 			MaxTokens: 8000,
 			Model:     anthropic.Model(r.model),
 			Messages:  anthropicMessages,
-			Tools: []anthropic.ToolUnionParam{
-				{OfTool: &anthropic.ToolParam{Name: "bash", Description: anthropic.String("run a shell command"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"command"}}}},
-				{OfTool: &anthropic.ToolParam{Name: "read_file", Description: anthropic.String("read file contents"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path"}}}},
-				{OfTool: &anthropic.ToolParam{Name: "write_file", Description: anthropic.String("write content to a file"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path", "content"}}}},
-				{OfTool: &anthropic.ToolParam{Name: "edit_file", Description: anthropic.String("replace exact text in a file once"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"path", "old_text", "new_text"}}}},
-				{OfTool: &anthropic.ToolParam{Name: "glob", Description: anthropic.String("find files matching a glob pattern"), InputSchema: anthropic.ToolInputSchemaParam{Required: []string{"pattern"}}}},
-			},
-			System: []anthropic.TextBlockParam{{Text: systemPrompt}},
+			Tools:     r.toolParams(),
+			System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
 		}
 
 		resp, err := r.client.Messages.New(ctx, params)
@@ -114,6 +108,22 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 	}
 
 	return "", fmt.Errorf("agent loop exceeded max iterations")
+}
+
+func (r *Runner) toolParams() []anthropic.ToolUnionParam {
+	specs := r.registry.Specs()
+	params := make([]anthropic.ToolUnionParam, 0, len(specs))
+	for _, spec := range specs {
+		params = append(params, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
+			Name:        spec.Name,
+			Description: anthropic.String(spec.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: spec.Properties,
+				Required:   spec.Required,
+			},
+		}})
+	}
+	return params
 }
 
 func prettyPrintValue(v any) string {
