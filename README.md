@@ -32,7 +32,7 @@ go-agent-harness/
 │   └── config.go              # .env 加载与 LLM 配置
 ├── loop/
 │   ├── types.go               # Message / Role / ToolSpec
-│   ├── registry.go            # 工具注册、工具调度、权限 authorizer 挂载点
+│   ├── registry.go            # 工具注册与工具调度
 │   └── runner.go              # Anthropic Messages API agent loop
 ├── tools/
 │   ├── bash.go                # bash 工具
@@ -118,7 +118,7 @@ tool registry
 |---|---|---|---|---|
 | s01 | Agent Loop | messages 如何在 user、assistant、tool_result 之间流动 | `loop/types.go`, `loop/runner.go` | 能解释一次完整 tool_use 回合 |
 | s02 | Tool Use | 新增工具时为什么不应改主循环 | `loop/registry.go`, `tools/` | 新增一个工具只需要注册 spec + handler |
-| s03 | Permission System | 哪些操作必须禁止、哪些需要用户确认 | `internal/permission/`, `loop.Registry.UseAuthorizer` | bash/write/edit 执行前经过权限闸门 |
+| s03 | Permission System | 哪些操作必须禁止、哪些需要用户确认 | `internal/permission/`, `internal/hooks/` | bash/write/edit 在 `PreToolUse` 前置闸门中被拦截或确认 |
 | s04 | Hook System | 如何在 loop 周围扩展审计、日志、埋点 | `internal/hooks/` | 实现 PreToolUse / PostToolUse hook 链 |
 | s05 | TodoWrite | agent 为什么需要显式计划 | `internal/todo/` | TodoItem 状态机：pending / in_progress / done |
 | s06 | Subagent | 子任务为什么要隔离上下文 | `internal/subagent/` | 子 agent 使用独立 messages，只返回结果摘要 |

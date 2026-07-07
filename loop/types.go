@@ -14,6 +14,7 @@ type Message struct {
 	ToolName  string
 }
 
+// ToolSpec: Tool Specification
 type ToolSpec struct {
 	Name        string
 	Description string

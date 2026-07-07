@@ -5,16 +5,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"go-agent-harness/config"
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/loop"
 	"go-agent-harness/tools"
 )
 
-// REPL: Read-Eval-Print Loop
-// ToolSpec: Tool Specification
 type App struct {
 	runner *loop.Runner
 	in     io.Reader
@@ -23,10 +23,10 @@ type App struct {
 
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	registry := newDefaultRegistry()
-	registry.UseAuthorizer(permission.Authorize)
+	hookManager := newDefaultHooks()
 
 	return &App{
-		runner: loop.NewRunner(cfg, registry),
+		runner: loop.NewRunner(cfg, registry, hookManager),
 		in:     in,
 		out:    out,
 	}
@@ -39,6 +39,7 @@ func (a *App) Run(ctx context.Context) error {
 	fmt.Fprintln(a.out, "go-agent-harness")
 	fmt.Fprintln(a.out, "Type a task, or type q/exit to quit.")
 
+	// REPL: Read-Eval-Print Loop
 	for {
 		fmt.Fprint(a.out, "> ")
 		if !scanner.Scan() {
@@ -122,4 +123,67 @@ func newDefaultRegistry() *loop.Registry {
 		},
 	}, tools.RunGlob)
 	return registry
+}
+
+func newDefaultHooks() *hooks.Manager {
+	hookManager := hooks.NewManager()
+	// ----- UserPromptSubmit -----
+	registerHook(hookManager, hooks.EventUserPromptSubmit, func(query string) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		fmt.Printf("[HOOK] UserPromptSubmit: working in %s\n", cwd)
+	})
+
+	// ----- PreToolUse -----
+	registerHook(hookManager, hooks.EventPreToolUse, func(call hooks.ToolCall) string {
+		if err := permission.Authorize(call.Name, call.Input); err != nil {
+			return err.Error()
+		}
+		return ""
+	})
+	registerHook(hookManager, hooks.EventPreToolUse, func(call hooks.ToolCall) string {
+		fmt.Printf("[HOOK] %s(%s)\n", call.Name, previewInput(call.Input))
+		return ""
+	})
+
+	// ----- PostToolUse -----
+	registerHook(hookManager, hooks.EventPostToolUse, func(call hooks.ToolCall, output string) {
+		if len(output) > 100000 {
+			fmt.Printf("[HOOK] Large output from %s: %d chars\n", call.Name, len(output))
+		} else {
+			// FOR DEBUG
+			// fmt.Printf("[HOOK] %s output: %s\n", call.Name, output)
+		}
+	})
+
+	// ----- Stop -----
+	registerHook(hookManager, hooks.EventStop, func(ctx hooks.StopContext) string {
+		fmt.Printf("[HOOK] Stop: session used %d tool calls\n", ctx.ToolCallCnt)
+		return ""
+	})
+	return hookManager
+}
+
+func registerHook(manager *hooks.Manager, event hooks.Event, callback any) {
+	if err := manager.Register(event, callback); err != nil {
+		panic(err)
+	}
+}
+
+func previewInput(input map[string]any) string {
+	const maxLen = 60
+	parts := make([]string, 0, 2)
+	for key, value := range input {
+		parts = append(parts, fmt.Sprintf("%s=%v", key, value))
+		if len(parts) == 2 {
+			break
+		}
+	}
+	preview := strings.Join(parts, ", ")
+	if len(preview) > maxLen {
+		return preview[:maxLen] + "..."
+	}
+	return preview
 }

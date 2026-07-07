@@ -7,7 +7,6 @@ import (
 )
 
 type Handler func(ctx context.Context, input any) (string, error)
-type Authorizer func(toolName string, args map[string]any) error
 
 type toolEntry struct {
 	spec    ToolSpec
@@ -15,9 +14,8 @@ type toolEntry struct {
 }
 
 type Registry struct {
-	entries    map[string]toolEntry
-	order      []string
-	authorizer Authorizer
+	entries map[string]toolEntry
+	order   []string
 }
 
 func NewRegistry() *Registry {
@@ -32,10 +30,6 @@ func (r *Registry) Register(spec ToolSpec, handler Handler) {
 		r.order = append(r.order, spec.Name)
 	}
 	r.entries[spec.Name] = toolEntry{spec: spec, handler: handler}
-}
-
-func (r *Registry) UseAuthorizer(authorizer Authorizer) {
-	r.authorizer = authorizer
 }
 
 func (r *Registry) Specs() []ToolSpec {
@@ -53,11 +47,6 @@ func (r *Registry) Dispatch(ctx context.Context, name string, input any) (string
 	}
 
 	args := parseToolInput(input)
-	if r.authorizer != nil {
-		if err := r.authorizer(name, args); err != nil {
-			return "", err
-		}
-	}
 	return entry.handler(ctx, args)
 }
 
