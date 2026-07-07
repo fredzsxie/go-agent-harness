@@ -14,17 +14,18 @@ import (
 
 const systemPrompt = `You are Claude Code, Anthropic's official CLI for Claude.
 You are a helpful coding assistant.
-You help users with software engineering tasks.
-Prefer editing existing files to creating new ones.
-Do not add features, refactor, or introduce abstractions beyond what the task requires.
+Before starting any multi-step task, use todo_write to plan your steps and keep statuses updated.
 Only use emojis if the user explicitly requests it.
 `
 
+const todoReminder = "<reminder>Update your todos.</reminder>"
+
 type Runner struct {
-	client   anthropic.Client
-	model    string
-	registry *Registry
-	hooks    *hooks.Manager
+	client          anthropic.Client
+	model           string
+	registry        *Registry
+	hooks           *hooks.Manager
+	roundsSinceTodo int
 }
 
 func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Manager) *Runner {
@@ -59,6 +60,11 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 		}
 	}
 
+	if r.shouldInjectTodoReminder(messages) {
+		anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(todoReminder)))
+		r.roundsSinceTodo = 0
+	}
+
 	// 限制最大迭代次数，避免工具调用链意外死循环。
 	toolCallCnt := 0
 	for i := 0; i < 8; i++ {
@@ -80,6 +86,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 		for _, block := range resp.Content {
 			if toolUse := block.AsToolUse(); toolUse.Name != "" {
 				toolUsed = true
+				r.roundsSinceTodo++
 				call := hooks.ToolCall{
 					ID:    toolUse.ID,
 					Name:  toolUse.Name,
@@ -96,6 +103,9 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
 						output = err.Error()
 					}
 					result = output
+					if call.Name == "todo_write" {
+						r.roundsSinceTodo = 0
+					}
 					r.hooks.TriggerPostToolUse(call, result)
 				}
 
@@ -159,4 +169,9 @@ func latestUserPrompt(messages []Message) string {
 		}
 	}
 	return ""
+}
+
+// 当连续 3 轮没有更新 todo 时，会在下一次模型调用前注入 <todoReminder>，并在调用 todo_write 后重置计数
+func (r *Runner) shouldInjectTodoReminder(messages []Message) bool {
+	return r.roundsSinceTodo >= 3 && len(messages) > 0
 }

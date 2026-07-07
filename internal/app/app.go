@@ -11,6 +11,7 @@ import (
 	"go-agent-harness/config"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/permission"
+	"go-agent-harness/internal/todo"
 	"go-agent-harness/loop"
 	"go-agent-harness/tools"
 )
@@ -24,6 +25,10 @@ type App struct {
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	registry := newDefaultRegistry()
 	hookManager := newDefaultHooks()
+
+	// add todo_write tool_use seperately
+	todoManager := todo.NewManager(out)
+	registerTodoTool(registry, todoManager)
 
 	return &App{
 		runner: loop.NewRunner(cfg, registry, hookManager),
@@ -123,6 +128,30 @@ func newDefaultRegistry() *loop.Registry {
 		},
 	}, tools.RunGlob)
 	return registry
+}
+
+func registerTodoTool(registry *loop.Registry, manager *todo.Manager) {
+	registry.Register(loop.ToolSpec{
+		Name:        "todo_write",
+		Description: "Create and manage a task list for your current coding session. Use this before and during multi-step work.",
+		Required:    []string{"todos"},
+		Properties: map[string]any{
+			"todos": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"content": map[string]any{"type": "string"},
+						"status": map[string]any{
+							"type": "string",
+							"enum": []string{"pending", "in_progress", "completed"},
+						},
+					},
+					"required": []string{"content", "status"},
+				},
+			},
+		},
+	}, manager.RunWrite)
 }
 
 func newDefaultHooks() *hooks.Manager {
