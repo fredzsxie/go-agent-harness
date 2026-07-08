@@ -32,7 +32,10 @@ go-agent-harness/
 │   └── config.go              # .env 加载与 LLM 配置
 ├── loop/
 │   ├── types.go               # Message / Role / ToolSpec
+│   ├── message.go             # 消息克隆、tool input 归一化等通用逻辑
 │   ├── registry.go            # 工具注册与工具调度
+│   ├── anthropic.go           # Anthropic client / message / tool schema 适配
+│   ├── tooluse.go             # hook + registry 的统一工具执行器
 │   └── runner.go              # Anthropic Messages API agent loop
 ├── tools/
 │   ├── bash.go                # bash 工具
@@ -40,17 +43,18 @@ go-agent-harness/
 │   ├── write.go               # write_file 工具
 │   ├── edit.go                # edit_file 工具
 │   ├── glob.go                # glob 工具
-│   └── path.go                # workspace safe path
+│   └── path.go                # workspace safe path 包装层
 └── internal/
     ├── app/                   # CLI 组合层：registry + permission + runner + REPL
+    ├── hooks/                 # s04 hook pipeline
     ├── permission/            # s03：deny list / rules / user approval
-    ├── hooks/                 # s04 预留
-    ├── todo/                  # s05 预留
-    ├── subagent/              # s06 预留
+    ├── prompt/                # s10：runtime prompt builder
+    ├── subagent/              # s06：独立上下文子 agent
+    ├── todo/                  # s05：todo_write 状态管理
+    ├── workspace/             # workspace root / path guard，未来可切到 worktree
     ├── skill/                 # s07 预留
     ├── compact/               # s08 预留
     ├── memory/                # s09 预留
-    ├── prompt/                # s10 预留
     ├── retry/                 # s11 预留
     ├── task/                  # s12 预留
     ├── scheduler/             # s13/s14 预留
@@ -195,9 +199,9 @@ tool registry
 ## 近期 TODO
 
 - 为 `loop.Registry` 增加单元测试：注册顺序、未知工具、权限拒绝。
-- 为 `tools.SafePath` 增加路径逃逸测试。
+- 为 `internal/workspace` 补充更多 symlink / worktree 场景测试。
 - 把 `internal/hooks` 接入 `Registry.Dispatch`。
-- 把 `systemPrompt` 从 `loop/runner.go` 移到 `internal/prompt`。
+- 为 `internal/prompt` 增加 section-based builder，并接入 memory / skill / retry 的动态片段。
 - 增加一个 mock LLM runner，降低无 API Key 时的学习门槛。
 
 ## 参考
