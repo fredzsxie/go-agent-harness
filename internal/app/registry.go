@@ -1,6 +1,7 @@
 package app
 
 import (
+	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/todo"
 	"go-agent-harness/loop"
@@ -101,4 +102,15 @@ func registerTaskTool(registry *loop.Registry, manager *subagent.Manager) {
 			},
 		},
 	}, manager.RunTask)
+}
+
+func registerSkillTool(registry *loop.Registry, manager *skill.Manager) {
+	registry.Register(loop.ToolSpec{
+		Name:        "load_skill",
+		Description: "Load the full content of a skill by name.",
+		Required:    []string{"name"},
+		Properties: map[string]any{
+			"name": map[string]any{"type": "string", "description": "Skill name"},
+		},
+	}, manager.RunLoad)
 }

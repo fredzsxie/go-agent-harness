@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"go-agent-harness/config"
+	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/todo"
 	"go-agent-harness/loop"
@@ -20,18 +22,26 @@ type App struct {
 }
 
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
+	// initial basic tools & hooks
 	registry := newDefaultRegistry()
 	hookManager := newDefaultHooks(out)
 
-	subRegistry := newSubagentRegistry()
-	subagentManager := subagent.New(cfg, subRegistry, hookManager, out)
-
+	// initial todo_write
 	todoManager := todo.NewManager(out)
 	registerTodoTool(registry, todoManager)
+
+	// initial subagent
+	subRegistry := newSubagentRegistry()
+	subagentManager := subagent.New(cfg, subRegistry, hookManager, out)
 	registerTaskTool(registry, subagentManager)
 
+	// init skill list
+	skillManager := skill.New()
+	skillCatalog := skillManager.ListSkills()
+	registerSkillTool(registry, skillManager)
+
 	return &App{
-		runner: loop.NewRunner(cfg, registry, hookManager),
+		runner: loop.NewRunner(cfg, registry, hookManager, prompt.Main(skillCatalog)),
 		in:     in,
 		out:    out,
 	}

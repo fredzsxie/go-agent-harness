@@ -4,15 +4,17 @@ package prompt
 
 import "strings"
 
-const todoReminder = "<reminder>Update your todos.</reminder>"
-
-func Main() string {
+func Main(skillCatalog string) string {
+	if strings.TrimSpace(skillCatalog) == "" {
+		skillCatalog = "(no skills found)"
+	}
 	return Build(
 		"You are Claude Code, Anthropic's official CLI for Claude.",
 		"You are a helpful coding assistant.",
 		"For complex sub-problems, use task to spawn a subagent.",
 		"Before starting any multi-step task, use todo_write to plan your steps and keep statuses updated.",
-		"Only use emojis if the user explicitly requests it.",
+		"Skills available:\n"+skillCatalog,
+		"Use load_skill to get full details when needed.",
 	)
 }
 
@@ -25,7 +27,7 @@ func Subagent() string {
 }
 
 func TodoReminder() string {
-	return todoReminder
+	return "<reminder>Update your todos.</reminder>"
 }
 
 func Build(sections ...string) string {

@@ -19,18 +19,23 @@ type Runner struct {
 	model           string
 	registry        *Registry
 	hooks           *hooks.Manager
+	systemPrompt    string
 	roundsSinceTodo int
 }
 
-func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Manager) *Runner {
+func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Manager, systemPrompt string) *Runner {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemPrompt = prompt.Main("")
+	}
 	return &Runner{
-		client:   NewAnthropicClient(cfg),
-		model:    cfg.Model,
-		registry: registry,
-		hooks:    hookManager,
+		client:       NewAnthropicClient(cfg),
+		model:        cfg.Model,
+		registry:     registry,
+		hooks:        hookManager,
+		systemPrompt: systemPrompt,
 	}
 }
 
@@ -55,7 +60,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 			Model:     anthropic.Model(r.model),
 			Messages:  ToAnthropicMessages(sessionMessages),
 			Tools:     ToolParams(r.registry),
-			System:    []anthropic.TextBlockParam{{Text: prompt.Main()}},
+			System:    []anthropic.TextBlockParam{{Text: r.systemPrompt}},
 		})
 		if err != nil {
 			return RunResult{}, err
