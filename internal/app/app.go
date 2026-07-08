@@ -60,13 +60,13 @@ func (a *App) Run(ctx context.Context) error {
 		}
 
 		messages = append(messages, loop.Message{Role: loop.RoleUser, Content: prompt})
-		output, err := a.runner.Run(ctx, messages)
+		result, err := a.runner.Run(ctx, messages)
 		if err != nil {
 			return err
 		}
-		if output != "" {
-			fmt.Fprintln(a.out, output)
-			messages = append(messages, loop.Message{Role: loop.RoleAssistant, Content: output})
+		messages = result.Messages
+		if result.Output != "" {
+			fmt.Fprintln(a.out, result.Output)
 		}
 	}
 

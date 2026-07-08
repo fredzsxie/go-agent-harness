@@ -43,107 +43,112 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 	}
 }
 
-func (r *Runner) Run(ctx context.Context, messages []Message) (string, error) {
-	// Runner 负责 hook 执行，App 只负责装配和传入消息
-	if prompt := latestUserPrompt(messages); prompt != "" {
+func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error) {
+	sessionMessages := cloneMessages(messages)
+
+	if prompt := latestUserPrompt(sessionMessages); prompt != "" {
 		r.hooks.TriggerUserPromptSubmit(prompt)
 	}
-
-	// 先把本轮的历史消息转换成 Anthropic Messages API 需要的格式。
-	anthropicMessages := make([]anthropic.MessageParam, 0, len(messages))
-	for _, message := range messages {
-		switch message.Role {
-		case RoleUser:
-			anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(message.Content)))
-		case RoleAssistant:
-			anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(message.Content)))
-		}
-	}
-
-	if r.shouldInjectTodoReminder(messages) {
-		anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(todoReminder)))
+	if r.shouldInjectTodoReminder(sessionMessages) {
+		sessionMessages = append(sessionMessages, Message{
+			Role:    RoleUser,
+			Content: todoReminder,
+		})
 		r.roundsSinceTodo = 0
 	}
 
-	// 限制最大迭代次数，避免工具调用链意外死循环。
 	toolCallCnt := 0
-	for i := 0; i < 8; i++ {
+	for {
 		params := anthropic.MessageNewParams{
 			MaxTokens: 8000,
 			Model:     anthropic.Model(r.model),
-			Messages:  anthropicMessages,
+			Messages:  toAnthropicMessages(sessionMessages),
 			Tools:     r.toolParams(),
 			System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
 		}
 
 		resp, err := r.client.Messages.New(ctx, params)
 		if err != nil {
-			return "", err
+			return RunResult{}, err
 		}
 
-		toolUsed := false
-		finalText := ""
-		for _, block := range resp.Content {
-			if toolUse := block.AsToolUse(); toolUse.Name != "" {
-				toolUsed = true
-				r.roundsSinceTodo++
-				call := hooks.ToolCall{
-					ID:    toolUse.ID,
-					Name:  toolUse.Name,
-					Input: parseToolInput(toolUse.Input),
-				}
-				toolCallCnt++
-				result := ""
-
-				if blocked := r.hooks.TriggerPreToolUse(call); blocked != "" {
-					result = blocked
-				} else {
-					output, err := r.registry.Dispatch(ctx, call.Name, call.Input)
-					if err != nil {
-						output = err.Error()
-					}
-					result = output
-					if call.Name == "todo_write" {
-						r.roundsSinceTodo = 0
-					}
-					r.hooks.TriggerPostToolUse(call, result)
-				}
-
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewAssistantMessage(anthropic.NewToolUseBlock(toolUse.ID, toolUse.Input, toolUse.Name)),
-					anthropic.MessageParam{Role: anthropic.MessageParamRoleUser, Content: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(toolUse.ID, result, false)}},
-				)
-				break
-			}
-			if text := block.AsText(); text.Text != "" {
-				if finalText != "" {
-					finalText += "\n"
-				}
-				finalText += text.Text
-			}
-		}
-
-		// 继续循环的信号（stop_reason == 'tool_use'）
-		if toolUsed || resp.StopReason == anthropic.StopReasonToolUse {
-			continue
-		}
+		assistantMessage, finalText := parseAssistantResponse(resp.Content)
+		sessionMessages = append(sessionMessages, assistantMessage)
 
 		// 退出循环的信号（stop_reason != "tool_use"）
-		if force := r.hooks.TriggerStop(hooks.StopContext{ToolCallCnt: toolCallCnt}); force != "" {
-			anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(force)))
-			continue
+		if resp.StopReason != anthropic.StopReasonToolUse {
+			if force := r.hooks.TriggerStop(hooks.StopContext{ToolCallCnt: toolCallCnt}); force != "" {
+				sessionMessages = append(sessionMessages, Message{
+					Role:    RoleUser,
+					Content: force,
+				})
+				continue
+			}
+			if finalText != "" {
+				return RunResult{
+					Messages: sessionMessages,
+					Output:   strings.TrimSpace(finalText),
+				}, nil
+			}
+			if len(resp.Content) == 0 {
+				return RunResult{}, fmt.Errorf("empty response from model")
+			}
+			return RunResult{Messages: sessionMessages}, nil
 		}
 
-		if finalText != "" {
-			return strings.TrimSpace(finalText), nil
+		r.roundsSinceTodo++
+		toolResults := make([]ContentBlock, 0, len(assistantMessage.Blocks))
+		for _, block := range assistantMessage.Blocks {
+			// fmt.Printf("[Block] block detail: %+v\n", block)
+			if block.Type != BlockToolUse {
+				continue
+			}
+
+			call := hooks.ToolCall{
+				ID:    block.ToolUseID,
+				Name:  block.ToolName,
+				Input: block.Input,
+			}
+			toolCallCnt++
+			result := ""
+			isError := false
+
+			if blocked := r.hooks.TriggerPreToolUse(call); blocked != "" {
+				result = blocked
+				isError = true
+			} else {
+				// 执行工具调用
+				output, err := r.registry.Dispatch(ctx, call.Name, call.Input)
+				if err != nil {
+					output = err.Error()
+					isError = true
+				}
+				result = output
+
+				// 重置todo_write计数
+				if call.Name == "todo_write" {
+					r.roundsSinceTodo = 0
+				}
+
+				r.hooks.TriggerPostToolUse(call, result)
+			}
+
+			toolResults = append(toolResults, ContentBlock{
+				Type:      BlockToolResult,
+				ToolUseID: call.ID,
+				Text:      result,
+				IsError:   isError,
+			})
 		}
-		if len(resp.Content) == 0 {
-			return "", fmt.Errorf("empty response from model")
+		if len(toolResults) == 0 {
+			return RunResult{}, fmt.Errorf("model requested tool_use without tool blocks")
 		}
-		return "", nil
+
+		sessionMessages = append(sessionMessages, Message{
+			Role:   RoleUser,
+			Blocks: toolResults,
+		})
 	}
-
-	return "", fmt.Errorf("agent loop exceeded max iterations")
 }
 
 func (r *Runner) toolParams() []anthropic.ToolUnionParam {
@@ -162,16 +167,140 @@ func (r *Runner) toolParams() []anthropic.ToolUnionParam {
 	return params
 }
 
+func parseAssistantResponse(content []anthropic.ContentBlockUnion) (Message, string) {
+	message := Message{
+		Role:   RoleAssistant,
+		Blocks: make([]ContentBlock, 0, len(content)),
+	}
+	finalText := ""
+
+	for _, block := range content {
+		if text := block.AsText(); text.Text != "" {
+			message.Blocks = append(message.Blocks, ContentBlock{
+				Type: BlockText,
+				Text: text.Text,
+			})
+			if message.Content != "" {
+				message.Content += "\n"
+			}
+			message.Content += text.Text
+			if finalText != "" {
+				finalText += "\n"
+			}
+			finalText += text.Text
+			continue
+		}
+
+		if toolUse := block.AsToolUse(); toolUse.Name != "" {
+			message.Blocks = append(message.Blocks, ContentBlock{
+				Type:      BlockToolUse,
+				ToolUseID: toolUse.ID,
+				ToolName:  toolUse.Name,
+				Input:     parseToolInput(toolUse.Input),
+			})
+		}
+	}
+
+	return message, finalText
+}
+
+func toAnthropicMessages(messages []Message) []anthropic.MessageParam {
+	anthropicMessages := make([]anthropic.MessageParam, 0, len(messages))
+	for _, message := range messages {
+		blocks := toAnthropicBlocks(message)
+		if len(blocks) == 0 {
+			continue
+		}
+		switch message.Role {
+		case RoleUser:
+			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+				Role:    anthropic.MessageParamRoleUser,
+				Content: blocks,
+			})
+		case RoleAssistant:
+			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+				Role:    anthropic.MessageParamRoleAssistant,
+				Content: blocks,
+			})
+		}
+	}
+	return anthropicMessages
+}
+
+func toAnthropicBlocks(message Message) []anthropic.ContentBlockParamUnion {
+	if len(message.Blocks) > 0 {
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(message.Blocks))
+		for _, block := range message.Blocks {
+			switch block.Type {
+			case BlockText:
+				blocks = append(blocks, anthropic.NewTextBlock(block.Text))
+			case BlockToolUse:
+				blocks = append(blocks, anthropic.NewToolUseBlock(block.ToolUseID, block.Input, block.ToolName))
+			case BlockToolResult:
+				blocks = append(blocks, anthropic.NewToolResultBlock(block.ToolUseID, block.Text, block.IsError))
+			}
+		}
+		return blocks
+	}
+
+	if strings.TrimSpace(message.Content) == "" {
+		return nil
+	}
+	return []anthropic.ContentBlockParamUnion{
+		anthropic.NewTextBlock(message.Content),
+	}
+}
+
+func cloneMessages(messages []Message) []Message {
+	cloned := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		copyMessage := Message{
+			Role:    message.Role,
+			Content: message.Content,
+		}
+		if len(message.Blocks) > 0 {
+			copyMessage.Blocks = make([]ContentBlock, 0, len(message.Blocks))
+			for _, block := range message.Blocks {
+				copyBlock := block
+				if block.Input != nil {
+					copyBlock.Input = cloneMap(block.Input)
+				}
+				copyMessage.Blocks = append(copyMessage.Blocks, copyBlock)
+			}
+		}
+		cloned = append(cloned, copyMessage)
+	}
+	return cloned
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func latestUserPrompt(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == RoleUser {
+		if messages[i].Role != RoleUser {
+			continue
+		}
+		if strings.TrimSpace(messages[i].Content) != "" {
 			return messages[i].Content
+		}
+		for _, block := range messages[i].Blocks {
+			if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
+				return block.Text
+			}
 		}
 	}
 	return ""
 }
 
-// 当连续 3 轮没有更新 todo 时，会在下一次模型调用前注入 <todoReminder>，并在调用 todo_write 后重置计数
 func (r *Runner) shouldInjectTodoReminder(messages []Message) bool {
 	return r.roundsSinceTodo >= 3 && len(messages) > 0
 }
