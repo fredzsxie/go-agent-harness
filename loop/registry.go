@@ -1,8 +1,9 @@
+// Package loop 中的 registry 维护工具定义与处理函数的注册表，
+// 为 runner 和子能力提供统一的工具调度入口。
 package loop
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 )
 
@@ -46,22 +47,6 @@ func (r *Registry) Dispatch(ctx context.Context, name string, input any) (string
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
 
-	args := parseToolInput(input)
+	args := NormalizeToolInput(input)
 	return entry.handler(ctx, args)
-}
-
-func parseToolInput(input any) map[string]any {
-	if input == nil {
-		return map[string]any{}
-	}
-	if m, ok := input.(map[string]any); ok {
-		return m
-	}
-	if raw, err := json.Marshal(input); err == nil {
-		var parsed map[string]any
-		if json.Unmarshal(raw, &parsed) == nil {
-			return parsed
-		}
-	}
-	return map[string]any{"command": fmt.Sprint(input)}
 }

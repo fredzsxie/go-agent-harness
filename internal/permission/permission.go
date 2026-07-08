@@ -1,11 +1,14 @@
+// Package permission 实现工具调用前的三段式权限闸门，
+// 将危险命令拦截、规则匹配和人工确认集中在一个入口。
 package permission
 
 import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"go-agent-harness/internal/workspace"
 )
 
 /*
@@ -23,16 +26,6 @@ Three gates inserted before tool execution:
          v            v             v             v
       (normal)     (blocked)    (ask user)   (user says no?)
 */
-
-var workspaceRoot = mustWorkspaceRoot()
-
-func mustWorkspaceRoot() string {
-	root, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	return root
-}
 
 // Gate 1: Hard deny list — always forbidden
 var DenyList = []string{
@@ -101,26 +94,11 @@ func toolMatches(toolName string, tools []string) bool {
 }
 
 func pathEscapesWorkspace(path string) bool {
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return false
 	}
-
-	fullPath := path
-	if !filepath.IsAbs(fullPath) {
-		fullPath = filepath.Join(workspaceRoot, path)
-	}
-	fullPath = filepath.Clean(fullPath)
-
-	resolved, err := filepath.EvalSymlinks(fullPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return true
-		}
-		resolved = fullPath
-	}
-
-	rootPrefix := workspaceRoot + string(os.PathSeparator)
-	return resolved != workspaceRoot && !strings.HasPrefix(resolved, rootPrefix)
+	_, err := workspace.Resolve(path)
+	return err != nil
 }
 
 // Gate 3: User approval — wait for confirmation after rule match

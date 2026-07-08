@@ -1,35 +1,9 @@
+// Package tools 中的路径包装层将文件工具统一接到 workspace 解析器上，
+// 避免各工具重复实现工作区边界判断。
 package tools
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-)
+import "go-agent-harness/internal/workspace"
 
-var workspaceRoot = mustWorkspaceRoot()
-
-func mustWorkspaceRoot() string {
-	root, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	return root
-}
-
-func SafePath(p string) (string, error) {
-	cleaned := filepath.Clean(p)
-	full := filepath.Join(workspaceRoot, cleaned)
-	resolved, err := filepath.EvalSymlinks(full)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", err
-		}
-		resolved = full
-	}
-	rootPrefix := workspaceRoot + string(os.PathSeparator)
-	if resolved != workspaceRoot && !strings.HasPrefix(resolved, rootPrefix) {
-		return "", fmt.Errorf("path escapes workspace: %s", p)
-	}
-	return resolved, nil
+func SafePath(path string) (string, error) {
+	return workspace.Resolve(path)
 }
