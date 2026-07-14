@@ -40,6 +40,9 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	skillCatalog := skillManager.ListSkills()
 	registerSkillTool(registry, skillManager)
 
+	// init context compact module
+	registerCompactTool(registry)
+
 	return &App{
 		runner: loop.NewRunner(cfg, registry, hookManager, prompt.Main(skillCatalog)),
 		in:     in,

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/todo"
@@ -113,4 +115,16 @@ func registerSkillTool(registry *loop.Registry, manager *skill.Manager) {
 			"name": map[string]any{"type": "string", "description": "Skill name"},
 		},
 	}, manager.RunLoad)
+}
+
+func registerCompactTool(registry *loop.Registry) {
+	registry.Register(loop.ToolSpec{
+		Name:        "compact",
+		Description: "Summarize earlier conversation to free context space.",
+		Properties: map[string]any{
+			"focus": map[string]any{"type": "string", "description": "Optional focus for what the summary should preserve."},
+		},
+	}, func(context.Context, any) (string, error) {
+		return "[compact is handled by the runner]", nil
+	})
 }
