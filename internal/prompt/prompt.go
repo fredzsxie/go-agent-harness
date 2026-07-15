@@ -4,18 +4,20 @@ package prompt
 
 import "strings"
 
-func Main(skillCatalog string) string {
+func Main(skillCatalog string, memorySections ...string) string {
 	if strings.TrimSpace(skillCatalog) == "" {
 		skillCatalog = "(no skills found)"
 	}
-	return Build(
+	sections := []string{
 		"You are Claude Code, Anthropic's official CLI for Claude.",
 		"You are a helpful coding assistant.",
 		"For complex sub-problems, use task to spawn a subagent.",
 		"Before starting any multi-step task, use todo_write to plan your steps and keep statuses updated.",
-		"Skills available:\n"+skillCatalog,
+		"Skills available:\n" + skillCatalog,
 		"Use load_skill to get full details when needed.",
-	)
+	}
+	sections = append(sections, memorySections...)
+	return Build(sections...)
 }
 
 func Subagent() string {

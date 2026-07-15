@@ -108,7 +108,7 @@ func (m *Manager) MaxReactiveRetries() int {
 
 func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, bool, error) {
 	fmt.Printf("[Prepare] L3 compact\n")
-	fmt.Printf("[Prepare] before L3 compact: %+v\n", messages)
+	// fmt.Printf("[Prepare] before L3 compact: %+v\n", messages)
 	prepared, err := m.ToolResultBudget(messages)
 	if err != nil {
 		return messages, false, err
@@ -126,6 +126,7 @@ func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Sum
 		return prepared, false, nil
 	}
 
+	// 如果经过三层压缩后，上下文仍旧超过长度，则调用LLM来进一步压缩
 	fmt.Printf("[Prepare] L4 compact, content: %v\n", prepared)
 	compacted, err := m.CompactHistory(ctx, prepared, summarize)
 	if err != nil {

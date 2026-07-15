@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -13,6 +14,7 @@ import (
 	"go-agent-harness/config"
 	"go-agent-harness/internal/compact"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/memory"
 	"go-agent-harness/internal/prompt"
 )
 
@@ -22,6 +24,7 @@ type Runner struct {
 	registry        *Registry
 	hooks           *hooks.Manager
 	compact         *compact.Manager
+	memory          *memory.Manager
 	systemPrompt    string
 	roundsSinceTodo int
 }
@@ -39,6 +42,7 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 		registry:     registry,
 		hooks:        hookManager,
 		compact:      compact.New(compact.Config{}),
+		memory:       memory.New(memory.Config{}),
 		systemPrompt: systemPrompt,
 	}
 }
@@ -57,23 +61,41 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		r.roundsSinceTodo = 0
 	}
 
+	// 每轮会话开始时，根据session调用LLM获取与会话可能相关的memory内容
+	memoriesContent, err := r.memory.LoadRelevant(ctx, sessionMessages, r.selectRelevantMemories)
+	if err != nil {
+		return RunResult{}, err
+	}
+
 	toolCallCnt := 0
 	reactiveRetries := 0
+	extractionSource := CloneMessages(sessionMessages)
 	for {
-		// always compact context before LLM calling
+		extractionSource = CloneMessages(sessionMessages)
+
+		// 在每次调用LLM之前，都压缩一次上下文
 		prepared, _, err := r.compact.Prepare(ctx, sessionMessages, r.summarizeCompactHistory)
 		if err != nil {
 			return RunResult{}, err
 		}
 		sessionMessages = prepared
 
+		// 看到这里，需要仔细研读下面两行代码，并补充对应注释
+		// 在每轮会话的基础上，加入
+		requestMessages := injectRelevantMemories(sessionMessages, memoriesContent)
+		// 为每轮会话的prompt附加上索引（MEMORY.md内容）
+		systemPrompt, err := r.systemPromptWithMemory()
+		if err != nil {
+			return RunResult{}, err
+		}
 		resp, err := r.client.Messages.New(ctx, anthropic.MessageNewParams{
 			MaxTokens: 8000,
 			Model:     anthropic.Model(r.model),
-			Messages:  ToAnthropicMessages(sessionMessages),
+			Messages:  ToAnthropicMessages(requestMessages),
 			Tools:     ToolParams(r.registry),
-			System:    []anthropic.TextBlockParam{{Text: r.systemPrompt}},
+			System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
 		})
+		fmt.Println("[LLM] Main llm calling done.")
 		if err != nil {
 			if isPromptTooLong(err) && reactiveRetries < r.compact.MaxReactiveRetries() {
 				compacted, compactErr := r.compact.ReactiveCompact(ctx, sessionMessages, r.summarizeCompactHistory)
@@ -99,6 +121,19 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 					Content: force,
 				})
 				continue
+			}
+
+			// 每轮会话结束后，整理memory（调用LLM判断是否有需要提取为memory的内容）
+			extractionMessages := append(CloneMessages(extractionSource), assistantMessage)
+			if count, err := r.memory.Extract(ctx, extractionMessages, r.extractMemories); err != nil {
+				fmt.Printf("[Memory: extraction skipped: %v]\n", err)
+			} else if count > 0 {
+				fmt.Printf("[Memory: extracted %d new memories]\n", count)
+			}
+			if before, after, err := r.memory.Consolidate(ctx, r.consolidateMemories); err != nil {
+				fmt.Printf("[Memory: consolidation skipped: %v]\n", err)
+			} else if before != after {
+				fmt.Printf("[Memory: consolidated %d -> %d memories]\n", before, after)
 			}
 
 			finalText := strings.TrimSpace(assistantMessage.Content)
@@ -204,6 +239,29 @@ func (r *Runner) executeToolUses(ctx context.Context, sessionMessages []Message,
 	return results, toolCallCnt, nil, false, nil
 }
 
+func (r *Runner) systemPromptWithMemory() (string, error) {
+	section, err := r.memory.SystemSection()
+	if err != nil {
+		return "", err
+	}
+	return prompt.Build(r.systemPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
+}
+
+func injectRelevantMemories(messages []Message, content string) []Message {
+	if strings.TrimSpace(content) == "" {
+		return messages
+	}
+	out := CloneMessages(messages)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i].Role != RoleUser || strings.TrimSpace(out[i].Content) == "" {
+			continue
+		}
+		out[i].Content = content + "\n\n" + out[i].Content
+		return out
+	}
+	return out
+}
+
 func (r *Runner) shouldInjectTodoReminder(messages []Message) bool {
 	return r.roundsSinceTodo >= 3 && len(messages) > 0
 }
@@ -240,7 +298,110 @@ func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []compact
 			parts = append(parts, text.Text)
 		}
 	}
+	fmt.Println("[LLM] Summarize compact history done.")
 	return strings.TrimSpace(strings.Join(parts, "\n")), nil
+}
+
+func (r *Runner) selectRelevantMemories(ctx context.Context, recent string, catalog []memory.CatalogItem, maxItems int) ([]int, error) {
+	if len(catalog) == 0 || strings.TrimSpace(recent) == "" {
+		return nil, nil
+	}
+	lines := make([]string, 0, len(catalog))
+	for _, item := range catalog {
+		lines = append(lines, fmt.Sprintf("%d: %s - %s", item.Index, item.Name, item.Description))
+	}
+	promptText := "Given the recent conversation and memory catalog, select memories that are clearly relevant. " +
+		"Return ONLY a JSON array of integer indices, for example [0,3]. If none are relevant, return [].\n\n" +
+		"Recent conversation:\n" + recent + "\n\nMemory catalog:\n" + strings.Join(lines, "\n")
+
+	resp, err := r.client.Messages.New(ctx, anthropic.MessageNewParams{
+		MaxTokens: 200,
+		Model:     anthropic.Model(r.model),
+		Messages: []anthropic.MessageParam{{
+			Role:    anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(promptText)},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var indices []int
+	if err := json.Unmarshal([]byte(extractJSONArray(responseText(resp.Content))), &indices); err != nil {
+		return nil, err
+	}
+	if len(indices) > maxItems {
+		indices = indices[:maxItems]
+	}
+	fmt.Printf("[LLM] Select relevant memories (indices:%v) done.\n", indices)
+	return indices, nil
+}
+
+func (r *Runner) extractMemories(ctx context.Context, dialogue string, existing []memory.CatalogItem) ([]memory.Record, error) {
+	lines := make([]string, 0, len(existing))
+	for _, item := range existing {
+		lines = append(lines, fmt.Sprintf("- %s: %s", item.Name, item.Description))
+	}
+	existingText := strings.Join(lines, "\n")
+	if existingText == "" {
+		existingText = "(none)"
+	}
+
+	promptText := "Extract stable user preferences, feedback about how to work, project facts, or reference pointers from this dialogue.\n" +
+		"Return ONLY a JSON array. Each item must be {\"name\",\"type\",\"description\",\"body\"}.\n" +
+		"name must be a short kebab-case identifier. type must be one of user, feedback, project, reference.\n" +
+		"If nothing is new or it is already covered, return [].\n\n" +
+		"Existing memories:\n" + existingText + "\n\nDialogue:\n" + dialogue
+
+	resp, err := r.client.Messages.New(ctx, anthropic.MessageNewParams{
+		MaxTokens: 800,
+		Model:     anthropic.Model(r.model),
+		Messages: []anthropic.MessageParam{{
+			Role:    anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(promptText)},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var records []memory.Record
+	if err := json.Unmarshal([]byte(extractJSONArray(responseText(resp.Content))), &records); err != nil {
+		return nil, err
+	}
+	fmt.Println("[LLM] Extract memories done.")
+	return records, nil
+}
+
+func (r *Runner) consolidateMemories(ctx context.Context, records []memory.Record) ([]memory.Record, error) {
+	raw, err := json.Marshal(records)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > 16000 {
+		raw = raw[:16000]
+	}
+
+	promptText := "Consolidate these memory files. Merge duplicates, remove outdated contradictions, preserve important user preferences, and keep the total under 10 memories.\n" +
+		"Return ONLY a JSON array. Each item must be {\"name\",\"type\",\"description\",\"body\"}.\n\n" + string(raw)
+
+	resp, err := r.client.Messages.New(ctx, anthropic.MessageNewParams{
+		MaxTokens: 3000,
+		Model:     anthropic.Model(r.model),
+		Messages: []anthropic.MessageParam{{
+			Role:    anthropic.MessageParamRoleUser,
+			Content: []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(promptText)},
+		}},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var next []memory.Record
+	if err := json.Unmarshal([]byte(extractJSONArray(responseText(resp.Content))), &next); err != nil {
+		return nil, err
+	}
+	fmt.Println("[LLM] Consolidate memories done.")
+	return next, nil
 }
 
 func compactPromptPayload(messages []compact.Message) (string, error) {
@@ -249,6 +410,26 @@ func compactPromptPayload(messages []compact.Message) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func responseText(content []anthropic.ContentBlockUnion) string {
+	var parts []string
+	for _, block := range content {
+		if text := block.AsText(); strings.TrimSpace(text.Text) != "" {
+			parts = append(parts, text.Text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+var jsonArrayRE = regexp.MustCompile(`(?s)\[.*\]`)
+
+func extractJSONArray(text string) string {
+	match := jsonArrayRE.FindString(text)
+	if strings.TrimSpace(match) == "" {
+		return "[]"
+	}
+	return match
 }
 
 func isPromptTooLong(err error) bool {
