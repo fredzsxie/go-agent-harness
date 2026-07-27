@@ -201,7 +201,6 @@ tool registry
 - 为 `loop.Registry` 增加单元测试：注册顺序、未知工具、权限拒绝。
 - 为 `internal/workspace` 补充更多 symlink / worktree 场景测试。
 - 把 `internal/hooks` 接入 `Registry.Dispatch`。
-- 为 `internal/prompt` 增加 section-based builder，并接入 memory / skill / retry 的动态片段。
 - 增加一个 mock LLM runner，降低无 API Key 时的学习门槛。
 
 ## 参考

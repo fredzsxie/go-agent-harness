@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"go-agent-harness/config"
@@ -43,8 +44,12 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	// init context compact module
 	registerCompactTool(registry)
 
+	workspace, err := os.Getwd()
+	if err != nil {
+		workspace = "."
+	}
 	return &App{
-		runner: loop.NewRunner(cfg, registry, hookManager, prompt.Main(skillCatalog)),
+		runner: loop.NewRunnerWithPromptBuilder(cfg, registry, hookManager, prompt.NewBuilder(skillCatalog, workspace)),
 		in:     in,
 		out:    out,
 	}

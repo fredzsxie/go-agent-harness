@@ -25,7 +25,8 @@ type Runner struct {
 	hooks           *hooks.Manager
 	compact         *compact.Manager
 	memory          *memory.Manager
-	systemPrompt    string
+	promptBuilder   *prompt.Builder
+	legacyPrompt    string
 	roundsSinceTodo int
 }
 
@@ -43,7 +44,28 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 		hooks:        hookManager,
 		compact:      compact.New(compact.Config{}),
 		memory:       memory.New(memory.Config{}),
-		systemPrompt: systemPrompt,
+		legacyPrompt: systemPrompt,
+	}
+}
+
+// NewRunnerWithPromptBuilder uses runtime prompt assembly. It is the normal
+// constructor for the application; NewRunner remains for backwards-compatible
+// callers that supply a static prompt.
+func NewRunnerWithPromptBuilder(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Manager, builder *prompt.Builder) *Runner {
+	if builder == nil {
+		return NewRunner(cfg, registry, hookManager, "")
+	}
+	if hookManager == nil {
+		hookManager = hooks.NewManager()
+	}
+	return &Runner{
+		client:        NewAnthropicClient(cfg),
+		model:         cfg.Model,
+		registry:      registry,
+		hooks:         hookManager,
+		compact:       compact.New(compact.Config{}),
+		memory:        memory.New(memory.Config{}),
+		promptBuilder: builder,
 	}
 }
 
@@ -80,11 +102,11 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		}
 		sessionMessages = prepared
 
-		// 看到这里，需要仔细研读下面两行代码，并补充对应注释
-		// 在每轮会话的基础上，加入
+		// Inject the selected memory records into the current user turn.
 		requestMessages := injectRelevantMemories(sessionMessages, memoriesContent)
-		// 为每轮会话的prompt附加上索引（MEMORY.md内容）
-		systemPrompt, err := r.systemPromptWithMemory()
+		// Rebuild only when the actual prompt context has changed (for example,
+		// a tool created .memory/MEMORY.md during the preceding tool round).
+		systemPrompt, err := r.systemPromptForRequest()
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -239,12 +261,23 @@ func (r *Runner) executeToolUses(ctx context.Context, sessionMessages []Message,
 	return results, toolCallCnt, nil, false, nil
 }
 
-func (r *Runner) systemPromptWithMemory() (string, error) {
+func (r *Runner) systemPromptForRequest() (string, error) {
 	section, err := r.memory.SystemSection()
 	if err != nil {
 		return "", err
 	}
-	return prompt.Build(r.systemPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
+	if r.promptBuilder == nil {
+		return prompt.Build(r.legacyPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
+	}
+	tools := r.registry.Specs()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return r.promptBuilder.Get(prompt.Context{
+		EnabledTools: names,
+		Memories:     section,
+	}), nil
 }
 
 func injectRelevantMemories(messages []Message, content string) []Message {
