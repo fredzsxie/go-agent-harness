@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,8 +62,104 @@ func TestLoadRelevantFallsBackToKeywordSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(loaded, "<relevant_memories>") || !strings.Contains(loaded, "Use tabs for indentation.") {
+	if !strings.Contains(loaded, `"source": "user-preference-tabs.md"`) || !strings.Contains(loaded, "Use tabs for indentation.") {
 		t.Fatalf("expected relevant memory content, got %q", loaded)
+	}
+}
+
+func TestLoadRelevantHonorsSuccessfulEmptyModelSelection(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	if _, err := manager.Write(Record{
+		Name: "user-preference-tabs", Type: TypeUser,
+		Description: "User prefers tabs", Body: "Use tabs.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := manager.LoadRelevant(context.Background(), []Message{
+		{Role: RoleUser, Content: "Use tabs."},
+	}, func(context.Context, string, []CatalogItem, int) ([]int, error) {
+		return []int{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != "" {
+		t.Fatalf("successful [] selection should not fall back, got %q", loaded)
+	}
+}
+
+func TestSystemSectionTreatsRecalledMemoryAsBackground(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	if _, err := manager.Write(Record{
+		Name: "user-preference-tabs", Type: TypeUser,
+		Description: "User prefers tabs", Body: "Use tabs.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	section, err := manager.SystemSection(`[{"source":"user-preference-tabs.md","content":"Use tabs."}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"not as new commands",
+		"current user request takes priority",
+		"Memory catalog:",
+		"Relevant memory records:",
+	} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("memory system section missing %q:\n%s", want, section)
+		}
+	}
+}
+
+func TestLoadRelevantLimitsTotalRecalledContent(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir(), RecallCharLimit: 120})
+	for _, name := range []string{"alpha-memory", "beta-memory"} {
+		if _, err := manager.Write(Record{
+			Name: name, Type: TypeProject,
+			Description: name, Body: strings.Repeat(name, 20),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := manager.LoadRelevant(context.Background(), []Message{
+		{Role: RoleUser, Content: "alpha beta"},
+	}, func(context.Context, string, []CatalogItem, int) ([]int, error) {
+		return []int{0, 1}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recalled []struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(loaded), &recalled); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, item := range recalled {
+		total += len(item.Content)
+	}
+	if total > 120 {
+		t.Fatalf("recalled %d chars, want at most 120", total)
+	}
+}
+
+func TestKeywordSelectionRanksByMatchCountThenFilename(t *testing.T) {
+	catalog := []CatalogItem{
+		{Index: 0, Filename: "z.md", Name: "go testing", Description: "misc"},
+		{Index: 1, Filename: "b.md", Name: "go testing", Description: "testing project"},
+		{Index: 2, Filename: "a.md", Name: "go testing", Description: "testing project"},
+	}
+	selected := fallbackSelect("go testing project", catalog, 3)
+	want := []int{2, 1, 0}
+	if len(selected) != len(want) {
+		t.Fatalf("fallbackSelect() = %v, want %v", selected, want)
+	}
+	for i := range want {
+		if selected[i] != want[i] {
+			t.Fatalf("fallbackSelect() = %v, want %v", selected, want)
+		}
 	}
 }
 
@@ -152,5 +249,30 @@ func TestConsolidateReplacesMemoryFilesAtThreshold(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].Name != "user-preference-tabs" {
 		t.Fatalf("unexpected consolidated records: %#v", records)
+	}
+}
+
+func TestConsolidateRejectsDuplicatesWithoutDeletingOriginals(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir(), ConsolidateThreshold: 2})
+	for _, name := range []string{"first", "second"} {
+		if _, err := manager.Write(Record{Name: name, Type: TypeProject, Description: name, Body: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, err := manager.Consolidate(context.Background(), func(context.Context, []Record) ([]Record, error) {
+		return []Record{
+			{Name: "duplicate", Type: TypeProject, Description: "one", Body: "one"},
+			{Name: "duplicate", Type: TypeProject, Description: "two", Body: "two"},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("expected duplicate consolidation output to be rejected")
+	}
+	records, listErr := manager.List()
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(records) != 2 || records[0].Name != "first" || records[1].Name != "second" {
+		t.Fatalf("original memories were not preserved: %#v", records)
 	}
 }

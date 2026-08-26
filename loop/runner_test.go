@@ -14,3 +14,10 @@ func TestMessageHasToolUseInspectsBlocks(t *testing.T) {
 		t.Fatal("empty/text-only response must not create a tool_result turn")
 	}
 }
+
+func TestExtractJSONArrayReturnsFirstValidArray(t *testing.T) {
+	got := extractJSONArray(`prefix [invalid] text [{"name":"memory"}] suffix [1,2]`)
+	if got != `[{"name":"memory"}]` {
+		t.Fatalf("extractJSONArray() = %q", got)
+	}
+}
