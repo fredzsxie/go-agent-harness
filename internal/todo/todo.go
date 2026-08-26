@@ -7,7 +7,11 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 )
+
+const maxTodos = 20
 
 type Status string
 
@@ -59,7 +63,7 @@ func (m *Manager) RunWrite(ctx context.Context, input any) (string, error) {
 	if m.out != nil {
 		fmt.Fprintln(m.out, rendered)
 	}
-	return fmt.Sprintf("Updated %d tasks", len(todos)), nil
+	return rendered, nil
 }
 
 func (m *Manager) Snapshot() []Item {
@@ -72,12 +76,24 @@ func (m *Manager) Snapshot() []Item {
 }
 
 func normalizeTodos(value any) ([]Item, error) {
+	if encoded, ok := value.(string); ok {
+		parsed, err := parseTodoString(encoded)
+		if err != nil {
+			return nil, err
+		}
+		value = parsed
+	}
+
 	items, ok := value.([]any)
 	if !ok {
 		return nil, fmt.Errorf("todos must be an array")
 	}
+	if len(items) > maxTodos {
+		return nil, fmt.Errorf("max %d todos allowed", maxTodos)
+	}
 
 	todos := make([]Item, 0, len(items))
+	inProgress := 0
 	for i, raw := range items {
 		itemMap, ok := raw.(map[string]any)
 		if !ok {
@@ -95,13 +111,40 @@ func normalizeTodos(value any) ([]Item, error) {
 		if !isValidStatus(status) {
 			return nil, fmt.Errorf("todos[%d] has invalid status %q", i, statusValue)
 		}
+		if status == StatusInProgress {
+			inProgress++
+		}
 
 		todos = append(todos, Item{
 			Content: content,
 			Status:  status,
 		})
 	}
+	if inProgress > 1 {
+		return nil, fmt.Errorf("only one todo can be in_progress at a time")
+	}
 	return todos, nil
+}
+
+func parseTodoString(encoded string) ([]any, error) {
+	encoded = strings.TrimSpace(encoded)
+	if encoded == "" {
+		return nil, fmt.Errorf("todos must be an array")
+	}
+
+	var parsed []any
+	if err := json.Unmarshal([]byte(encoded), &parsed); err == nil {
+		return parsed, nil
+	}
+	// YAML safely accepts the simple single-quoted list representation emitted
+	// by some OpenAI-compatible providers. It does not evaluate expressions.
+	if err := yaml.Unmarshal([]byte(encoded), &parsed); err != nil {
+		return nil, fmt.Errorf("todos must be an array or encoded array")
+	}
+	if parsed == nil {
+		return nil, fmt.Errorf("todos must be an array or encoded array")
+	}
+	return parsed, nil
 }
 
 func isValidStatus(status Status) bool {
@@ -114,10 +157,18 @@ func isValidStatus(status Status) bool {
 }
 
 func renderTodos(todos []Item) string {
+	if len(todos) == 0 {
+		return "No todos."
+	}
 	lines := []string{"", "## Current Tasks"}
+	done := 0
 	for _, todo := range todos {
 		lines = append(lines, fmt.Sprintf("  [%s] %s", statusIcon(todo.Status), todo.Content))
+		if todo.Status == StatusCompleted {
+			done++
+		}
 	}
+	lines = append(lines, fmt.Sprintf("\n(%d/%d completed)", done, len(todos)))
 	return strings.Join(lines, "\n")
 }
 

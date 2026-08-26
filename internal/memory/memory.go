@@ -54,10 +54,18 @@ const (
 	TypeReference Type = "reference"
 )
 
+type Scope string
+
+const (
+	ScopePersistent  Scope = "persistent"
+	ScopeCurrentTask Scope = "current_task"
+)
+
 type Record struct {
 	Filename    string `json:"filename,omitempty"`
 	Name        string `json:"name"`
 	Type        Type   `json:"type"`
+	Scope       Scope  `json:"scope,omitempty"`
 	Description string `json:"description"`
 	Body        string `json:"body"`
 }
@@ -136,7 +144,12 @@ func (m *Manager) Write(record Record) (string, error) {
 	if strings.TrimSpace(record.Body) == "" {
 		return "", fmt.Errorf("memory body is required")
 	}
-	record.Type = normalizeType(record.Type)
+	if !isValidType(record.Type) {
+		return "", fmt.Errorf("unknown memory type: %s", record.Type)
+	}
+	if record.Scope == "" {
+		record.Scope = ScopePersistent
+	}
 
 	if err := os.MkdirAll(m.cfg.MemoryDir, 0o755); err != nil {
 		return "", err
@@ -271,12 +284,13 @@ func (m *Manager) Extract(ctx context.Context, messages []Message, extract Extra
 
 	count := 0
 	for _, record := range records {
-		if strings.TrimSpace(record.Name) == "" || strings.TrimSpace(record.Description) == "" || strings.TrimSpace(record.Body) == "" {
+		if !shouldStoreMemory(record, existing) {
 			continue
 		}
 		if _, err := m.Write(record); err != nil {
 			return count, err
 		}
+		existing = append(existing, record)
 		count++
 	}
 	return count, nil
@@ -417,6 +431,7 @@ func parseRecord(filename string, content string) (Record, error) {
 		record.Name = strings.TrimSuffix(filename, filepath.Ext(filename))
 		record.Description = firstLine(record.Body)
 		record.Type = TypeUser
+		record.Scope = ScopePersistent
 		return record, nil
 	}
 
@@ -427,6 +442,7 @@ func parseRecord(filename string, content string) (Record, error) {
 	record.Name = fallback(fm.Name, strings.TrimSuffix(filename, filepath.Ext(filename)))
 	record.Description = fallback(fm.Description, firstLine(record.Body))
 	record.Type = normalizeType(fm.Type)
+	record.Scope = ScopePersistent
 	return record, nil
 }
 
@@ -469,6 +485,54 @@ func normalizeType(t Type) Type {
 	default:
 		return TypeUser
 	}
+}
+
+func isValidType(t Type) bool {
+	switch t {
+	case TypeUser, TypeFeedback, TypeProject, TypeReference:
+		return true
+	default:
+		return false
+	}
+}
+
+var temporaryMemoryMarkers = []string{
+	"this session", "current session", "this turn", "current turn",
+	"this task", "current task", "for now", "just this time", "today only",
+	"本次会话", "当前会话", "这一轮", "当前轮次", "本次任务", "当前任务", "暂时",
+	"今回だけ", "このセッション", "現在のタスク",
+}
+
+func shouldStoreMemory(candidate Record, existing []Record) bool {
+	if candidate.Scope != ScopePersistent || !isValidType(candidate.Type) {
+		return false
+	}
+	if strings.TrimSpace(candidate.Name) == "" || strings.TrimSpace(candidate.Description) == "" || strings.TrimSpace(candidate.Body) == "" {
+		return false
+	}
+
+	candidateText := normalizedMemoryText(candidate.Name + "\n" + candidate.Description + "\n" + candidate.Body)
+	for _, marker := range temporaryMemoryMarkers {
+		if strings.Contains(candidateText, normalizedMemoryText(marker)) {
+			return false
+		}
+	}
+
+	candidateSlug := slugify(candidate.Name)
+	candidateDescription := normalizedMemoryText(candidate.Description)
+	candidateBody := normalizedMemoryText(candidate.Body)
+	for _, record := range existing {
+		if slugify(record.Name) == candidateSlug ||
+			normalizedMemoryText(record.Description) == candidateDescription ||
+			normalizedMemoryText(record.Body) == candidateBody {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizedMemoryText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(value)), " ")
 }
 
 var slugPart = regexp.MustCompile(`[^a-z0-9]+`)

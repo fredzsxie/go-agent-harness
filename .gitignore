@@ -6,3 +6,8 @@ coverage.out
 # Local
 .env
 CLAUDE.md
+skills/**
+.transcripts/**
+.task_outputs/**
+.memory/**
+!.memory/MEMORY.md

@@ -77,6 +77,7 @@ func TestExtractWritesNewMemories(t *testing.T) {
 		return []Record{{
 			Name:        "user-preference-single-quotes",
 			Type:        TypeUser,
+			Scope:       ScopePersistent,
 			Description: "User prefers single quotes",
 			Body:        "Use single quotes where the language style allows it.",
 		}}, nil
@@ -89,6 +90,37 @@ func TestExtractWritesNewMemories(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(manager.cfg.MemoryDir, "user-preference-single-quotes.md")); err != nil {
 		t.Fatalf("expected memory file: %v", err)
+	}
+}
+
+func TestExtractStoresOnlyNewPersistentMemories(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	if _, err := manager.Write(Record{
+		Name: "existing-style", Type: TypeUser,
+		Description: "User prefers tabs", Body: "Use tabs.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := manager.Extract(context.Background(), []Message{{Role: RoleUser, Content: "Remember my preferences."}}, func(context.Context, string, []CatalogItem) ([]Record, error) {
+		return []Record{
+			{Name: "temporary", Type: TypeProject, Scope: ScopeCurrentTask, Description: "Current task path", Body: "Use /tmp only for this task."},
+			{Name: "duplicate", Type: TypeUser, Scope: ScopePersistent, Description: "User prefers tabs", Body: "Different wording."},
+			{Name: "new-style", Type: TypeFeedback, Scope: ScopePersistent, Description: "User prefers concise answers", Body: "Keep future answers concise."},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one durable, non-duplicate memory, got %d", count)
+	}
+	records, err := manager.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[1].Name != "new-style" {
+		t.Fatalf("unexpected stored records: %#v", records)
 	}
 }
 

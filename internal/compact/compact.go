@@ -113,10 +113,16 @@ func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Sum
 	if err != nil {
 		return messages, false, err
 	}
+	if EstimateSize(prepared) <= m.cfg.ContextLimit {
+		return prepared, false, nil
+	}
 
 	fmt.Printf("[Prepare] L1 compact\n")
 	// fmt.Printf("[Prepare] before L1 compact: %+v\n", prepared)
 	prepared = m.SnipCompact(prepared)
+	if EstimateSize(prepared) <= m.cfg.ContextLimit {
+		return prepared, false, nil
+	}
 
 	fmt.Printf("[Prepare] L2 compact\n")
 	// fmt.Printf("[Prepare] before L2 compact: %+v\n", prepared)
@@ -193,15 +199,37 @@ func (m *Manager) SnipCompact(messages []Message) []Message {
 // L2: micro_compact 旧工具调用结果替换为占位符
 func (m *Manager) MicroCompact(messages []Message) []Message {
 	positions := collectToolResults(messages)
-	if len(positions) <= m.cfg.KeepRecentToolResults {
+	lastAssistant := -1
+	for i, message := range messages {
+		if message.Role == RoleAssistant {
+			lastAssistant = i
+		}
+	}
+
+	consumed := make([]toolResultPosition, 0, len(positions))
+	for _, pos := range positions {
+		// Results after the latest assistant message have not yet been observed by
+		// the model. Preserve the whole batch, even when it exceeds the normal
+		// recent-result count.
+		if lastAssistant >= 0 && pos.messageIndex > lastAssistant {
+			continue
+		}
+		consumed = append(consumed, pos)
+	}
+	if len(consumed) <= m.cfg.KeepRecentToolResults {
 		return messages
 	}
 
 	out := cloneMessages(messages)
-	for _, pos := range positions[:len(positions)-m.cfg.KeepRecentToolResults] {
+	for _, pos := range consumed[:len(consumed)-m.cfg.KeepRecentToolResults] {
 		block := &out[pos.messageIndex].Blocks[pos.blockIndex]
 		if len(block.Text) > 120 {
-			block.Text = "[Earlier tool result compacted. Re-run if needed.]"
+			path, err := m.saveOutput(block.ToolUseID, block.Text)
+			if err != nil {
+				block.Text = "[Earlier tool result compacted. Re-run if needed.]"
+				continue
+			}
+			block.Text = fmt.Sprintf("[Earlier tool result saved at %s]", path)
 		}
 	}
 
@@ -215,43 +243,42 @@ func (m *Manager) ToolResultBudget(messages []Message) ([]Message, error) {
 		return messages, nil
 	}
 
-	last := messages[len(messages)-1]
-	if last.Role != RoleUser || len(last.Blocks) == 0 {
-		return messages, nil
-	}
-
 	type rankedBlock struct {
-		index int
-		size  int
+		position toolResultPosition
+		size     int
 	}
-	blocks := make([]rankedBlock, 0, len(last.Blocks))
+	lastAssistant := -1
+	for i, message := range messages {
+		if message.Role == RoleAssistant {
+			lastAssistant = i
+		}
+	}
+	positions := collectToolResults(messages)
+	blocks := make([]rankedBlock, 0, len(positions))
 	total := 0
-	for i, block := range last.Blocks {
-		if block.Type != BlockToolResult {
+	for _, position := range positions {
+		if lastAssistant >= 0 && position.messageIndex <= lastAssistant {
 			continue
 		}
+		block := messages[position.messageIndex].Blocks[position.blockIndex]
 		size := len(block.Text)
 		total += size
-		blocks = append(blocks, rankedBlock{index: i, size: size})
+		blocks = append(blocks, rankedBlock{position: position, size: size})
 	}
-	if total <= m.cfg.ToolResultBudget {
+	if len(blocks) == 0 {
 		return messages, nil
 	}
-
 	sort.Slice(blocks, func(i, j int) bool {
 		return blocks[i].size > blocks[j].size
 	})
 
 	out := cloneMessages(messages)
-	lastBlocks := out[len(out)-1].Blocks
+	changed := false
 	for _, ranked := range blocks {
-		if total <= m.cfg.ToolResultBudget {
+		if ranked.size <= m.cfg.PersistThreshold && total <= m.cfg.ToolResultBudget {
 			break
 		}
-		block := &lastBlocks[ranked.index]
-		if len(block.Text) <= m.cfg.PersistThreshold {
-			continue
-		}
+		block := &out[ranked.position.messageIndex].Blocks[ranked.position.blockIndex]
 
 		original := block.Text
 		persisted, err := m.persistLargeOutput(block.ToolUseID, original)
@@ -260,9 +287,12 @@ func (m *Manager) ToolResultBudget(messages []Message) ([]Message, error) {
 		}
 		block.Text = persisted
 		total += len(persisted) - len(original)
+		changed = true
 	}
 
-	// fmt.Printf("[Context Compact - L3]: compact result: %+v\n\n", out)
+	if !changed {
+		return messages, nil
+	}
 	return out, nil
 }
 
@@ -346,9 +376,19 @@ func summarizeHistory(ctx context.Context, messages []Message, summarize Summari
 }
 
 func (m *Manager) persistLargeOutput(toolUseID string, output string) (string, error) {
-	if len(output) <= m.cfg.PersistThreshold {
-		return output, nil
+	path, err := m.saveOutput(toolUseID, output)
+	if err != nil {
+		return "", err
 	}
+
+	preview := output
+	if len(preview) > m.cfg.PreviewBytes {
+		preview = preview[:m.cfg.PreviewBytes]
+	}
+	return fmt.Sprintf("<persisted-output>\nFull output: %s\nPreview:\n%s\n</persisted-output>", path, preview), nil
+}
+
+func (m *Manager) saveOutput(toolUseID string, output string) (string, error) {
 	if err := os.MkdirAll(m.cfg.ToolResultsDir, 0o755); err != nil {
 		return "", err
 	}
@@ -361,12 +401,7 @@ func (m *Manager) persistLargeOutput(toolUseID string, output string) (string, e
 	} else if err != nil {
 		return "", err
 	}
-
-	preview := output
-	if len(preview) > m.cfg.PreviewBytes {
-		preview = preview[:m.cfg.PreviewBytes]
-	}
-	return fmt.Sprintf("<persisted-output>\nFull output: %s\nPreview:\n%s\n</persisted-output>", path, preview), nil
+	return path, nil
 }
 
 func safeOutputName(toolUseID string, output string) string {

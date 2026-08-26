@@ -56,6 +56,7 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 	m.logf("\n[Subagent spawned]\n")
 
 	messages := []loop.Message{{Role: loop.RoleUser, Content: description}}
+	finished := false
 
 	for range maxTurns {
 		resp, err := m.client.Messages.New(ctx, anthropic.MessageNewParams{
@@ -72,7 +73,8 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 		assistantMessage := loop.ParseAnthropicAssistantMessage(resp.Content)
 		messages = append(messages, assistantMessage)
 
-		if resp.StopReason != anthropic.StopReasonToolUse {
+		if !hasToolUse(assistantMessage) {
+			finished = true
 			break
 		}
 
@@ -91,11 +93,24 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 
 	result := loop.LatestAssistantText(messages)
 	if strings.TrimSpace(result) == "" {
-		result = "Subagent stopped after 30 turns without final answer."
+		if finished {
+			result = "(no summary)"
+		} else {
+			result = "Subagent stopped after 30 turns without final answer."
+		}
 	}
 
 	m.logf("[Subagent done]\n\n")
 	return strings.TrimSpace(result), nil
+}
+
+func hasToolUse(message loop.Message) bool {
+	for _, block := range message.Blocks {
+		if block.Type == loop.BlockToolUse {
+			return true
+		}
+	}
+	return false
 }
 
 func preview(text string, max int) string {

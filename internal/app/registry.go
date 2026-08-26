@@ -36,7 +36,8 @@ func registerBaseTools(registry *loop.Registry) {
 		Description: "Read a UTF-8 text file inside the workspace.",
 		Required:    []string{"path"},
 		Properties: map[string]any{
-			"path": map[string]any{"type": "string", "description": "Workspace-relative file path."},
+			"path":  map[string]any{"type": "string", "description": "Workspace-relative file path."},
+			"limit": map[string]any{"type": "integer", "minimum": 1, "description": "Optional maximum number of lines."},
 		},
 	}, tools.RunReadFile)
 	registry.Register(loop.ToolSpec{
@@ -75,11 +76,12 @@ func registerTodoTool(registry *loop.Registry, manager *todo.Manager) {
 		Required:    []string{"todos"},
 		Properties: map[string]any{
 			"todos": map[string]any{
-				"type": "array",
+				"type":     "array",
+				"maxItems": 20,
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"content": map[string]any{"type": "string"},
+						"content": map[string]any{"type": "string", "minLength": 1},
 						"status": map[string]any{
 							"type": "string",
 							"enum": []string{"pending", "in_progress", "completed"},
