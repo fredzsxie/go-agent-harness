@@ -2,9 +2,9 @@
 name: learn-claude-course-sync
 description: |
   对照本地 learn-claude-code 课程仓库，为当前 Go agent harness 项目补齐或对齐对应课程能力。适用于用户提到
-  `~/Documents/Code/learn-claude-code`、`s01` 到 `s20`、`README.md`、`code.py`、`参考版`、`添加对应代码逻辑`、`在最新项目代码基础上完善` 等场景。
+  `~/Documents/Code/learn-claude-code`、`s01` 到 `s17`、`README.md`、`code.py`、`参考版`、`添加对应代码逻辑`、`在最新项目代码基础上完善` 等场景。
   Keywords: learn-claude-code, s01, s02, s03, s04, s05, s06, s07, s08, s09, s10,
-  s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, README.md, code.py, Claude Code 学习项目
+  s11, s12, s13, s14, s15, s16, s17, README.md, code.py, Claude Code 学习项目
 ---
 
 # Learn Claude Course Sync

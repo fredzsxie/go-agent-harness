@@ -12,6 +12,7 @@ import (
 	"go-agent-harness/internal/prompt"
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
+	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/todo"
 	"go-agent-harness/loop"
 )
@@ -35,6 +36,10 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	subRegistry := newSubagentRegistry()
 	subagentManager := subagent.New(cfg, subRegistry, hookManager, out)
 	registerTaskTool(registry, subagentManager)
+
+	// initial task_system
+	taskManager := task.New(task.Config{})
+	registerTaskSystemTools(registry, taskManager)
 
 	// init skill list
 	skillManager := skill.New()

@@ -5,6 +5,7 @@ import (
 
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
+	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/todo"
 	"go-agent-harness/loop"
 	"go-agent-harness/tools"
@@ -106,6 +107,38 @@ func registerTaskTool(registry *loop.Registry, manager *subagent.Manager) {
 			},
 		},
 	}, manager.RunTask)
+}
+
+func registerTaskSystemTools(registry *loop.Registry, manager *task.Manager) {
+	// 任务节点必须先创建再建立依赖，因此 schema 明确约束运行时任务 ID。
+	taskID := map[string]any{"type": "string", "pattern": `^task_[0-9a-f]{8}$`}
+	registry.Register(loop.ToolSpec{
+		Name: "create_task", Description: "Create a persistent pending task. Create all task nodes before adding dependencies.",
+		Required: []string{"subject"}, Properties: map[string]any{
+			"subject":     map[string]any{"type": "string", "minLength": 1},
+			"description": map[string]any{"type": "string"},
+		},
+	}, manager.RunCreate)
+	registry.Register(loop.ToolSpec{
+		Name: "update_task", Description: "Add dependencies to an unowned pending task using IDs returned by create_task.",
+		Required: []string{"task_id", "addBlockedBy"}, Properties: map[string]any{
+			"task_id":      taskID,
+			"addBlockedBy": map[string]any{"type": "array", "minItems": 1, "items": taskID},
+		},
+	}, manager.RunUpdate)
+	registry.Register(loop.ToolSpec{Name: "list_tasks", Description: "List persistent tasks and their states."}, manager.RunList)
+	registry.Register(loop.ToolSpec{
+		Name: "get_task", Description: "Get one persistent task by ID.",
+		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID},
+	}, manager.RunGet)
+	registry.Register(loop.ToolSpec{
+		Name: "claim_task", Description: "Claim a pending task after all dependencies are completed.",
+		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID},
+	}, manager.RunClaim)
+	registry.Register(loop.ToolSpec{
+		Name: "complete_task", Description: "Complete a task owned by this agent and report newly unblocked tasks.",
+		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID},
+	}, manager.RunComplete)
 }
 
 func registerSkillTool(registry *loop.Registry, manager *skill.Manager) {

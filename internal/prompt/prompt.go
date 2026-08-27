@@ -78,10 +78,19 @@ func (b *Builder) assemble(context Context) string {
 		"Working directory: " + context.Workspace,
 		"Skills available:\n" + b.skillCatalog + "\nUse load_skill to get full details when needed.",
 	}
+	// 仅在任务工具实际可用时注入建图规则，避免提示不存在的能力。
+	if hasTool(context.EnabledTools, "create_task") {
+		sections = append(sections, "Use task tools to track dependencies and progress. Create all task nodes first. After create_task returns runtime-generated IDs, use update_task with those exact IDs to add dependencies.")
+	}
 	if context.Memories != "" {
 		sections = append(sections, context.Memories)
 	}
 	return Build(sections...)
+}
+
+func hasTool(tools []string, target string) bool {
+	index := sort.SearchStrings(tools, target)
+	return index < len(tools) && tools[index] == target
 }
 
 // Main is retained for callers that need a static prompt. New code should use

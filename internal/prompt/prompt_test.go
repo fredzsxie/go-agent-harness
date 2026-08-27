@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestTaskInstructionsRequireTaskTools(t *testing.T) {
+	builder := NewBuilder("skills", "/workspace")
+	without := builder.Get(Context{EnabledTools: []string{"bash"}})
+	if strings.Contains(without, "Create all task nodes first") {
+		t.Fatal("task instructions should not appear without task tools")
+	}
+	with := builder.Get(Context{EnabledTools: []string{"update_task", "create_task"}})
+	if !strings.Contains(with, "Create all task nodes first") || !strings.Contains(with, "runtime-generated IDs") {
+		t.Fatalf("task instructions missing:\n%s", with)
+	}
+}
+
 func TestBuilderAssemblesSectionsFromRuntimeContext(t *testing.T) {
 	builder := NewBuilder("- deploy", "/repo")
 	prompt := builder.Get(Context{EnabledTools: []string{"write_file", "read_file"}})

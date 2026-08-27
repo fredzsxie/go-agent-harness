@@ -19,17 +19,14 @@
 | s07 | `s07_skill_loading/` | `internal/skill/`, `internal/prompt/`, `internal/app/` |
 | s08 | `s08_context_compact/` | `internal/compact/`, `loop/runner.go` |
 | s09 | `s09_memory/` | `internal/memory/`, `internal/prompt/` |
-| s10 | `s10_system_prompt/` | `internal/prompt/`, `internal/app/app.go`, `loop/runner.go` |
-| s11 | `s11_error_recovery/` | `internal/retry/`, `loop/runner.go` |
-| s12 | `s12_task_system/` | `internal/task/`, `internal/subagent/`, `internal/app/registry.go` |
-| s13 | `s13_background_tasks/` | `internal/scheduler/`, `internal/task/`, `loop/runner.go` |
-| s14 | `s14_cron_scheduler/` | `internal/scheduler/` |
-| s15 | `s15_agent_teams/` | `internal/team/` |
-| s16 | `s16_team_protocols/` | `internal/team/` |
-| s17 | `s17_autonomous_agents/` | `internal/team/`, `internal/task/` |
-| s18 | `s18_worktree_isolation/` | `internal/worktree/`, `internal/workspace/` |
-| s19 | `s19_mcp_plugin/` | `tools/`, 后续可扩到 `internal/mcp/` |
-| s20 | `s20_comprehensive/` | 全局联调，以 `loop/runner.go` 为中心 |
+| s10 | `s10_task_system/` | `internal/task/`, `internal/app/registry.go` |
+| s11 | `s11_background_tasks/` | `internal/scheduler/`, `loop/runner.go` |
+| s12 | `s12_cron_scheduler/` | `internal/scheduler/` |
+| s13 | `s13_agent_teams/` | `internal/team/`, `internal/task/`, `internal/worktree/`, `internal/workspace/` |
+| s14 | `s14_mcp_plugin/` | `loop/registry.go`, 后续可扩到 `internal/mcp/` |
+| s15 | `s15_integrated_harness/` | 全局联调，以 `loop/runner.go` 为中心 |
+| s16 | `s16_workflow_runtime/` | 后续可扩到 `internal/workflow/` |
+| s17 | `s17_goal_loop/` | `internal/hooks/`, 后续可扩到 `internal/goal/` |
 
 ## 阅读顺序
 

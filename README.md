@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s09 Memory**。s01–s09 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s10–s17 暂不实现。
+当前学习进度到 **s10 Task System**。s01–s10 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s11–s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -29,7 +29,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s07 | Skill Loading | 已完成 | `internal/skill/`, `internal/prompt/` |
 | s08 | Context Compact | 已完成 | `internal/compact/`, `loop/runner.go` |
 | s09 | Memory | 已完成 | `internal/memory/`, `loop/runner.go` |
-| s10 | Task System | 待学习 | `internal/task/` 目前为空包 |
+| s10 | Task System | 已完成 | `internal/task/`, `.tasks/` |
 | s11 | Background Tasks | 待学习 | `internal/scheduler/` 目前为空包 |
 | s12 | Cron Scheduler | 待学习 | `internal/scheduler/` 目前为空包 |
 | s13 | Agent Teams | 待学习 | `internal/team/`, `internal/worktree/` 目前为空包 |
@@ -132,7 +132,7 @@ go-agent-harness/
     ├── memory/       # s09
     ├── prompt/       # 运行时 prompt 组装
     ├── retry/        # 预留，尚未实现
-    ├── task/         # s10 待学习
+    ├── task/         # s10 持久化任务图
     ├── scheduler/    # s11/s12 待学习
     ├── team/         # s13 待学习
     └── worktree/     # s13 待学习
@@ -163,4 +163,4 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go vet ./...
 
 ## 下一步
 
-下一课从新版 **s10 Task System** 开始，重点是文件持久化任务图、依赖关系、状态机与原子认领。在开始 s10 前，不提前实现 Background、Cron、Agent Teams、MCP、Workflow 或 Goal Loop。
+下一课从新版 **s11 Background Tasks** 开始。在开始 s11 前，不提前实现 Background、Cron、Agent Teams、MCP、Workflow 或 Goal Loop。
