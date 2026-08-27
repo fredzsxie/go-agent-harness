@@ -13,25 +13,33 @@ import (
 
 func newDefaultRegistry() *loop.Registry {
 	registry := loop.NewRegistry()
-	registerBaseTools(registry)
+	registerBaseTools(registry, true)
 	return registry
 }
 
 func newSubagentRegistry() *loop.Registry {
 	registry := loop.NewRegistry()
-	registerBaseTools(registry)
+	registerBaseTools(registry, false)
 	return registry
 }
 
-func registerBaseTools(registry *loop.Registry) {
+func registerBaseTools(registry *loop.Registry, allowBackground bool) {
+	// 后台参数只暴露给主 Agent；subagent 仍使用同步 Bash，避免声明未接入的能力。
+	bashDescription := "Run a shell command in the current workspace. Prefer read_file/glob for inspection when possible."
+	bashProperties := map[string]any{
+		"command": map[string]any{"type": "string", "description": "Shell command to execute."},
+	}
+	if allowBackground {
+		bashDescription = "Run a shell command in the current workspace. Set run_in_background to true only for an independent slow command."
+		bashProperties["run_in_background"] = map[string]any{"type": "boolean", "description": "Run asynchronously and collect the result on a later turn."}
+	}
 	registry.Register(loop.ToolSpec{
 		Name:        "bash",
-		Description: "Run a shell command in the current workspace. Prefer read_file/glob for inspection when possible.",
+		Description: bashDescription,
 		Required:    []string{"command"},
-		Properties: map[string]any{
-			"command": map[string]any{"type": "string", "description": "Shell command to execute."},
-		},
+		Properties:  bashProperties,
 	}, tools.RunBash)
+
 	registry.Register(loop.ToolSpec{
 		Name:        "read_file",
 		Description: "Read a UTF-8 text file inside the workspace.",

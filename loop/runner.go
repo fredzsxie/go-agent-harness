@@ -15,6 +15,7 @@ import (
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/memory"
 	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/scheduler"
 )
 
 type Runner struct {
@@ -24,6 +25,7 @@ type Runner struct {
 	hooks         *hooks.Manager
 	compact       *compact.Manager
 	memory        *memory.Manager
+	background    *scheduler.Manager
 	promptBuilder *prompt.Builder
 	legacyPrompt  string
 }
@@ -35,7 +37,7 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemPrompt = prompt.Main("")
 	}
-	return &Runner{
+	runner := &Runner{
 		client:       NewAnthropicClient(cfg),
 		model:        cfg.Model,
 		registry:     registry,
@@ -44,6 +46,8 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 		memory:       memory.New(memory.Config{}),
 		legacyPrompt: systemPrompt,
 	}
+	runner.background = newBackgroundManager(registry)
+	return runner
 }
 
 // NewRunnerWithPromptBuilder uses runtime prompt assembly. It is the normal
@@ -56,7 +60,7 @@ func NewRunnerWithPromptBuilder(cfg config.LLMConfig, registry *Registry, hookMa
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
-	return &Runner{
+	runner := &Runner{
 		client:        NewAnthropicClient(cfg),
 		model:         cfg.Model,
 		registry:      registry,
@@ -64,6 +68,22 @@ func NewRunnerWithPromptBuilder(cfg config.LLMConfig, registry *Registry, hookMa
 		compact:       compact.New(compact.Config{}),
 		memory:        memory.New(memory.Config{}),
 		promptBuilder: builder,
+	}
+	runner.background = newBackgroundManager(registry)
+	return runner
+}
+
+func newBackgroundManager(registry *Registry) *scheduler.Manager {
+	// 后台执行仍复用 Registry 中的 Bash handler，避免维护第二套命令执行逻辑。
+	return scheduler.New(func(ctx context.Context, command string) (string, error) {
+		return registry.Dispatch(ctx, "bash", map[string]any{"command": command})
+	})
+}
+
+func (r *Runner) Close() {
+	// Runner 的生命周期结束时同步回收尚未完成的后台命令。
+	if r.background != nil {
+		r.background.Close()
 	}
 }
 
@@ -90,6 +110,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 	extractionSource := CloneMessages(sessionMessages)
 	for {
 		extractionSource = CloneMessages(sessionMessages)
+		// 后台任务不会主动唤醒 Agent；只在下一次 LLM 调用前收集一次完成结果。
+		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())
 
 		// 在每次调用LLM之前，都压缩一次上下文
 		prepared, _, err := r.compact.Prepare(ctx, sessionMessages, r.summarizeCompactHistory)
@@ -235,6 +257,17 @@ func (r *Runner) executeToolUses(ctx context.Context, sessionMessages []Message,
 		if blocked := r.hooks.TriggerPreToolUse(call); blocked != "" {
 			result = blocked
 			isError = true
+		} else if scheduler.ShouldRunBackground(call.Name, call.Input) {
+			// PreToolUse 已通过后才异步启动，并立即用占位结果结束本次 tool_use。
+			command, _ := call.Input["command"].(string)
+			id, err := r.background.Start(command)
+			if err != nil {
+				result = "Error: " + err.Error()
+				isError = true
+			} else {
+				result = fmt.Sprintf("[Background task %s started] The result will be collected on a later turn.", id)
+			}
+			r.hooks.TriggerPostToolUse(call, result)
 		} else {
 			output, err := r.registry.Dispatch(ctx, call.Name, call.Input)
 			if err != nil {
@@ -254,6 +287,30 @@ func (r *Runner) executeToolUses(ctx context.Context, sessionMessages []Message,
 	}
 
 	return results, toolCallCnt, nil, false, nil
+}
+
+func injectBackgroundResults(messages []Message, notifications []string) []Message {
+	if len(notifications) == 0 {
+		return messages
+	}
+	blocks := make([]ContentBlock, 0, len(notifications)+1)
+	for _, notification := range notifications {
+		blocks = append(blocks, ContentBlock{Type: BlockText, Text: notification})
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role != RoleUser {
+		// Anthropic 消息要求角色交替；assistant 结尾时新增一个 user 通知回合。
+		return append(messages, Message{Role: RoleUser, Blocks: blocks})
+	}
+
+	last := &messages[len(messages)-1]
+	// user 结尾时合并到原回合，并保留已有文本或 tool_result 的先后顺序。
+	if strings.TrimSpace(last.Content) != "" {
+		last.Blocks = append([]ContentBlock{{Type: BlockText, Text: last.Content}}, last.Blocks...)
+		// 原先message[-1].Content的内容放到 message[-1].Blocks[0]中
+		last.Content = ""
+	}
+	last.Blocks = append(last.Blocks, blocks...)
+	return messages
 }
 
 func (r *Runner) systemPromptForRequest(relevantMemories string) (string, error) {

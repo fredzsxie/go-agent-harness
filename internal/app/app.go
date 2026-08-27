@@ -63,6 +63,8 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	// 无论正常退出还是读取失败，都要停止并回收后台命令。
+	defer a.runner.Close()
 	messages := make([]loop.Message, 0, 16)
 
 	fmt.Fprintln(a.out, "go-agent-harness")

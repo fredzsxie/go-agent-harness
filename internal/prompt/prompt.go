@@ -82,6 +82,9 @@ func (b *Builder) assemble(context Context) string {
 	if hasTool(context.EnabledTools, "create_task") {
 		sections = append(sections, "Use task tools to track dependencies and progress. Create all task nodes first. After create_task returns runtime-generated IDs, use update_task with those exact IDs to add dependencies.")
 	}
+	if hasTool(context.EnabledTools, "bash") {
+		sections = append(sections, "Set bash run_in_background to true only for independent slow commands whose results are not needed immediately.")
+	}
 	if context.Memories != "" {
 		sections = append(sections, context.Memories)
 	}
