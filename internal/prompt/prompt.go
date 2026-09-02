@@ -85,6 +85,9 @@ func (b *Builder) assemble(context Context) string {
 	if hasTool(context.EnabledTools, "bash") {
 		sections = append(sections, "Set bash run_in_background to true only for independent slow commands whose results are not needed immediately.")
 	}
+	if hasTool(context.EnabledTools, "schedule_cron") {
+		sections = append(sections, "Use schedule_cron for work that should start at a future local time. Cron jobs run only while this Agent process is running; durable jobs are restored after restart but missed times are not replayed.")
+	}
 	if context.Memories != "" {
 		sections = append(sections, context.Memories)
 	}

@@ -11,3 +11,4 @@ CLAUDE.md
 .tasks/**
 .memory/**
 !.memory/MEMORY.md
+.scheduled_tasks.json

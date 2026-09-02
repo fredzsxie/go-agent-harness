@@ -1,5 +1,5 @@
-// Package scheduler 管理后台命令的生命周期；定时与周期调度由后续课程补充。
-package scheduler
+// Package runtime 管理后台任务与 Cron Scheduler 的运行时生命周期。
+package runtime
 
 import (
 	"context"
@@ -20,7 +20,7 @@ type task struct {
 	result  string
 }
 
-type Manager struct {
+type BackgroundManager struct {
 	mu      sync.Mutex
 	tasks   map[string]*task
 	ready   []string
@@ -33,11 +33,11 @@ type Manager struct {
 }
 
 // New 创建可跨多次 LLM 调用存活的后台任务管理器。
-func New(execute Executor) *Manager {
+func NewBackground(execute Executor) *BackgroundManager {
 	// 使用独立于单次 Runner.Run 的根 context，使任务能跨 LLM 回合继续执行；
 	// 应用退出时再通过 Close 统一取消。
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{
+	return &BackgroundManager{
 		tasks:   make(map[string]*task),
 		execute: execute,
 		ctx:     ctx,
@@ -52,7 +52,7 @@ func ShouldRunBackground(toolName string, input map[string]any) bool {
 }
 
 // Start 校验并登记命令，然后立即返回任务 ID，不等待命令执行完成。
-func (m *Manager) Start(command string) (string, error) {
+func (m *BackgroundManager) Start(command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", fmt.Errorf("bash command cannot be empty")
@@ -73,12 +73,13 @@ func (m *Manager) Start(command string) (string, error) {
 	m.mu.Unlock()
 
 	// 任务登记完成后再启动 goroutine，确保极快完成的命令也能找到自己的状态。
+	fmt.Printf("  [Background] started %s: %s\n", id, preview(command, 60))
 	go m.run(id, command)
 	return id, nil
 }
 
 // run 在后台执行单个命令，并把最终状态加入待收集队列。
-func (m *Manager) run(id, command string) {
+func (m *BackgroundManager) run(id, command string) {
 	defer m.wg.Done()
 	// 每个后台命令独立限时，同时受 Manager.Close 的全局取消控制。
 	ctx, cancel := context.WithTimeout(m.ctx, commandTimeout)
@@ -111,7 +112,7 @@ func (m *Manager) run(id, command string) {
 }
 
 // Collect 一次性取走已完成任务，并转换成不复用原 tool_use_id 的独立通知文本。
-func (m *Manager) Collect() []string {
+func (m *BackgroundManager) Collect() []string {
 	m.mu.Lock()
 	ready := m.ready
 	m.ready = nil
@@ -130,12 +131,14 @@ func (m *Manager) Collect() []string {
 			"<task_notification>\n  <task_id>%s</task_id>\n  <status>%s</status>\n  <command>%s</command>\n  <summary>%s</summary>\n</task_notification>",
 			current.id, current.status, escape(current.command), escape(truncate(current.result, 500)),
 		))
+		// 只在结果真正交付给主循环时记录 collected，便于区分“已完成”和“已消费”。
+		fmt.Printf("  [Background] collected %s: %s\n", current.id, current.status)
 	}
 	return notifications
 }
 
 // Close 拒绝新任务、取消运行中的任务，并等待后台 goroutine 全部结束。
-func (m *Manager) Close() {
+func (m *BackgroundManager) Close() {
 	// 先阻止新任务并广播取消，再等待所有 goroutine 退出，避免应用结束后遗留任务。
 	m.mu.Lock()
 	if !m.closed {
@@ -152,6 +155,11 @@ func truncate(value string, limit int) string {
 		return string(runes[:limit])
 	}
 	return value
+}
+
+func preview(command string, limit int) string {
+	// 将多行命令压成单行，避免一条生命周期日志占用多行终端输出。
+	return truncate(strings.Join(strings.Fields(command), " "), limit)
 }
 
 func escape(value string) string {

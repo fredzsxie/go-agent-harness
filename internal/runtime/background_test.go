@@ -1,4 +1,4 @@
-package scheduler
+package runtime
 
 import (
 	"context"
@@ -23,7 +23,7 @@ func TestShouldRunBackgroundRequiresExplicitBashFlag(t *testing.T) {
 }
 
 func TestManagerStartsAndCollectsCompletedTask(t *testing.T) {
-	manager := New(func(_ context.Context, command string) (string, error) {
+	manager := NewBackground(func(_ context.Context, command string) (string, error) {
 		return "finished " + command, nil
 	})
 	defer manager.Close()
@@ -48,7 +48,7 @@ func TestManagerStartsAndCollectsCompletedTask(t *testing.T) {
 }
 
 func TestManagerReportsFailureAndEscapesNotification(t *testing.T) {
-	manager := New(func(context.Context, string) (string, error) {
+	manager := NewBackground(func(context.Context, string) (string, error) {
 		return "bad <output>", errors.New("exit status 1")
 	})
 	defer manager.Close()
@@ -64,7 +64,7 @@ func TestManagerReportsFailureAndEscapesNotification(t *testing.T) {
 	}
 }
 
-func waitForNotification(t *testing.T, manager *Manager) string {
+func waitForNotification(t *testing.T, manager *BackgroundManager) string {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

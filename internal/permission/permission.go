@@ -118,6 +118,15 @@ func AskUser(toolName string, args map[string]any, reason string) string {
 
 // Authorize chains all three gates before a tool executes.
 func Authorize(toolName string, args map[string]any) error {
+	return authorize(toolName, args, true)
+}
+
+// AuthorizeNonInteractive 对定时触发的 Agent turn 禁止任何需要终端确认的操作。
+func AuthorizeNonInteractive(toolName string, args map[string]any) error {
+	return authorize(toolName, args, false)
+}
+
+func authorize(toolName string, args map[string]any, interactive bool) error {
 	if toolName == "bash" {
 		command, _ := args["command"].(string)
 		if reason := CheckDenyList(command); reason != "" {
@@ -126,6 +135,9 @@ func Authorize(toolName string, args map[string]any) error {
 	}
 
 	if reason := CheckRules(toolName, args); reason != "" {
+		if !interactive {
+			return fmt.Errorf("permission denied: scheduled turns cannot request interactive approval")
+		}
 		decision := AskUser(toolName, args, reason)
 		if decision == "deny" {
 			return fmt.Errorf("permission denied: %s", reason)

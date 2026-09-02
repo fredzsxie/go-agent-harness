@@ -17,6 +17,20 @@ func TestTaskInstructionsRequireTaskTools(t *testing.T) {
 	}
 }
 
+func TestCronInstructionsRequireScheduleTool(t *testing.T) {
+	builder := NewBuilder("skills", "/workspace")
+	without := builder.Get(Context{EnabledTools: []string{"bash"}})
+	if strings.Contains(without, "future local time") {
+		t.Fatal("cron instructions should not appear without schedule_cron")
+	}
+	with := builder.Get(Context{EnabledTools: []string{"schedule_cron"}})
+	for _, want := range []string{"future local time", "missed times are not replayed"} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("cron instructions missing %q:\n%s", want, with)
+		}
+	}
+}
+
 func TestBuilderAssemblesSectionsFromRuntimeContext(t *testing.T) {
 	builder := NewBuilder("- deploy", "/repo")
 	prompt := builder.Get(Context{EnabledTools: []string{"write_file", "read_file"}})

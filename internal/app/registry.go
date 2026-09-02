@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/task"
@@ -147,6 +148,29 @@ func registerTaskSystemTools(registry *loop.Registry, manager *task.Manager) {
 		Name: "complete_task", Description: "Complete a task owned by this agent and report newly unblocked tasks.",
 		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID},
 	}, manager.RunComplete)
+}
+
+func registerCronTools(registry *loop.Registry, manager *agentruntime.CronScheduler) {
+	registry.Register(loop.ToolSpec{
+		Name:        "schedule_cron",
+		Description: "Schedule a prompt using a five-field cron expression in the Agent process's local time.",
+		Required:    []string{"cron", "prompt"},
+		Properties: map[string]any{
+			"cron":      map[string]any{"type": "string", "description": "Five fields: minute hour day month weekday."},
+			"prompt":    map[string]any{"type": "string", "minLength": 1, "description": "Work for the Agent to start when due."},
+			"recurring": map[string]any{"type": "boolean", "description": "Repeat on future matches; defaults to true."},
+			"durable":   map[string]any{"type": "boolean", "description": "Persist across process restarts; defaults to true."},
+		},
+	}, manager.RunSchedule)
+	registry.Register(loop.ToolSpec{Name: "list_crons", Description: "List scheduled cron jobs."}, manager.RunList)
+	registry.Register(loop.ToolSpec{
+		Name:        "cancel_cron",
+		Description: "Cancel a scheduled cron job and any pending delivery.",
+		Required:    []string{"job_id"},
+		Properties: map[string]any{
+			"job_id": map[string]any{"type": "string", "pattern": `^cron_[0-9a-f]{8}$`},
+		},
+	}, manager.RunCancel)
 }
 
 func registerSkillTool(registry *loop.Registry, manager *skill.Manager) {

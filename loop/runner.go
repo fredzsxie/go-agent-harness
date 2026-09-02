@@ -10,24 +10,22 @@ import (
 
 	"go-agent-harness/config"
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/agentctx"
 	"go-agent-harness/internal/compact"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/memory"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
-	"go-agent-harness/internal/scheduler"
+	agentruntime "go-agent-harness/internal/runtime"
 )
 
 type Runner struct {
-	client        agent.Model
-	worker        *Worker
-	registry      *Registry
-	hooks         *hooks.Manager
-	compact       *compact.Manager
-	memory        *memory.Manager
-	background    *scheduler.Manager
-	promptBuilder *prompt.Builder
-	legacyPrompt  string
+	client     agent.Model
+	worker     *Worker
+	registry   *Registry
+	hooks      *hooks.Manager
+	context    *agentctx.Manager
+	background *agentruntime.BackgroundManager
 }
 
 func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Manager, systemPrompt string) *Runner {
@@ -38,12 +36,10 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 		systemPrompt = prompt.Main("")
 	}
 	runner := &Runner{
-		client:       llmmodel.NewAnthropic(cfg),
-		registry:     registry,
-		hooks:        hookManager,
-		compact:      compact.New(compact.Config{}),
-		memory:       memory.New(memory.Config{}),
-		legacyPrompt: systemPrompt,
+		client:   llmmodel.NewAnthropic(cfg),
+		registry: registry,
+		hooks:    hookManager,
+		context:  agentctx.New(nil, systemPrompt),
 	}
 	runner.background = newBackgroundManager(registry)
 	runner.worker = NewWorker(runner.client, registry, hookManager)
@@ -61,21 +57,19 @@ func NewRunnerWithPromptBuilder(cfg config.LLMConfig, registry *Registry, hookMa
 		hookManager = hooks.NewManager()
 	}
 	runner := &Runner{
-		client:        llmmodel.NewAnthropic(cfg),
-		registry:      registry,
-		hooks:         hookManager,
-		compact:       compact.New(compact.Config{}),
-		memory:        memory.New(memory.Config{}),
-		promptBuilder: builder,
+		client:   llmmodel.NewAnthropic(cfg),
+		registry: registry,
+		hooks:    hookManager,
+		context:  agentctx.New(builder, ""),
 	}
 	runner.background = newBackgroundManager(registry)
 	runner.worker = NewWorker(runner.client, registry, hookManager)
 	return runner
 }
 
-func newBackgroundManager(registry *Registry) *scheduler.Manager {
+func newBackgroundManager(registry *Registry) *agentruntime.BackgroundManager {
 	// 后台执行仍复用 Registry 中的 Bash handler，避免维护第二套命令执行逻辑。
-	return scheduler.New(func(ctx context.Context, command string) (string, error) {
+	return agentruntime.NewBackground(func(ctx context.Context, command string) (string, error) {
 		return registry.Dispatch(ctx, "bash", map[string]any{"command": command})
 	})
 }
@@ -95,11 +89,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 	}
 
 	// 每轮会话开始时，根据session调用LLM获取与会话可能相关的memory内容
-	memoriesContent, err := r.memory.LoadRelevant(ctx, sessionMessages, r.selectRelevantMemories)
-	if err != nil {
-		return RunResult{}, err
-	}
-	systemPrompt, err := r.systemPromptForRequest(memoriesContent)
+	systemPrompt, err := r.context.StartRequest(ctx, sessionMessages, r.registry.Specs(), r.selectRelevantMemories)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -114,7 +104,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())
 
 		// 在每次调用LLM之前，都压缩一次上下文
-		prepared, _, err := r.compact.Prepare(ctx, sessionMessages, r.summarizeCompactHistory)
+		prepared, err := r.context.Prepare(ctx, sessionMessages, r.summarizeCompactHistory)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -127,8 +117,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 			if turn.Assistant.Role != "" {
 				return RunResult{}, err
 			}
-			if isPromptTooLong(err) && reactiveRetries < r.compact.MaxReactiveRetries() {
-				compacted, compactErr := r.compact.ReactiveCompact(ctx, sessionMessages, r.summarizeCompactHistory)
+			if isPromptTooLong(err) && reactiveRetries < r.context.MaxReactiveRetries() {
+				compacted, compactErr := r.context.ReactiveCompact(ctx, sessionMessages, r.summarizeCompactHistory)
 				if compactErr != nil {
 					return RunResult{}, compactErr
 				}
@@ -159,14 +149,15 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 
 			// 每轮会话结束后，整理memory（调用LLM判断是否有需要提取为memory的内容）
 			extractionMessages := append(CloneMessages(extractionSource), assistantMessage)
-			if count, err := r.memory.Extract(ctx, extractionMessages, r.extractMemories); err != nil {
-				fmt.Printf("[Memory: extraction skipped: %v]\n", err)
-			} else if count > 0 {
-				fmt.Printf("[Memory: extracted %d new memories]\n", count)
-				if before, after, err := r.memory.Consolidate(ctx, r.consolidateMemories); err != nil {
-					fmt.Printf("[Memory: consolidation skipped: %v]\n", err)
-				} else if before != after {
-					fmt.Printf("[Memory: consolidated %d -> %d memories]\n", before, after)
+			report := r.context.Finalize(ctx, extractionMessages, r.extractMemories, r.consolidateMemories)
+			if report.ExtractError != nil {
+				fmt.Printf("[Memory: extraction skipped: %v]\n", report.ExtractError)
+			} else if report.Extracted > 0 {
+				fmt.Printf("[Memory: extracted %d new memories]\n", report.Extracted)
+				if report.ConsolidateErr != nil {
+					fmt.Printf("[Memory: consolidation skipped: %v]\n", report.ConsolidateErr)
+				} else if report.Before != report.After {
+					fmt.Printf("[Memory: consolidated %d -> %d memories]\n", report.Before, report.After)
 				}
 			}
 
@@ -220,7 +211,7 @@ func compactToolResultText(results []ContentBlock) string {
 
 func (r *Runner) interceptTool(ctx context.Context, sessionMessages []Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
 	if call.Name == "compact" {
-		compacted, err := r.compact.CompactHistory(ctx, sessionMessages, r.summarizeCompactHistory)
+		compacted, err := r.context.Compact(ctx, sessionMessages, r.summarizeCompactHistory)
 		if err != nil {
 			return ToolOutcome{}, true, err
 		}
@@ -231,7 +222,7 @@ func (r *Runner) interceptTool(ctx context.Context, sessionMessages []Message, c
 		}, true, nil
 	}
 
-	if scheduler.ShouldRunBackground(call.Name, call.Input) {
+	if agentruntime.ShouldRunBackground(call.Name, call.Input) {
 		// PreToolUse 已通过后才异步启动，并立即用占位结果结束本次 tool_use。
 		command, _ := call.Input["command"].(string)
 		id, err := r.background.Start(command)
@@ -265,25 +256,6 @@ func injectBackgroundResults(messages []Message, notifications []string) []Messa
 	}
 	last.Blocks = append(last.Blocks, blocks...)
 	return messages
-}
-
-func (r *Runner) systemPromptForRequest(relevantMemories string) (string, error) {
-	section, err := r.memory.SystemSection(relevantMemories)
-	if err != nil {
-		return "", err
-	}
-	if r.promptBuilder == nil {
-		return prompt.Build(r.legacyPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
-	}
-	tools := r.registry.Specs()
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		names = append(names, tool.Name)
-	}
-	return r.promptBuilder.Get(prompt.Context{
-		EnabledTools: names,
-		Memories:     section,
-	}), nil
 }
 
 func messageHasToolUse(message Message) bool {

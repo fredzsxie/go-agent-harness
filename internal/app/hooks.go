@@ -5,13 +5,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/workspace"
 )
 
-func newDefaultHooks(out io.Writer) *hooks.Manager {
+func newDefaultHooks(out io.Writer, nonInteractive *atomic.Bool) *hooks.Manager {
 	hookManager := hooks.NewManager()
 	writer := outputWriter(out)
 	// ----- UserPromptSubmit -----
@@ -21,7 +22,11 @@ func newDefaultHooks(out io.Writer) *hooks.Manager {
 
 	// ----- PreToolUse -----
 	registerHook(hookManager, hooks.EventPreToolUse, func(call hooks.ToolCall) string {
-		if err := permission.Authorize(call.Name, call.Input); err != nil {
+		authorize := permission.Authorize
+		if nonInteractive != nil && nonInteractive.Load() {
+			authorize = permission.AuthorizeNonInteractive
+		}
+		if err := authorize(call.Name, call.Input); err != nil {
 			return err.Error()
 		}
 		return ""
