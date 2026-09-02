@@ -1,6 +1,5 @@
-// Package conversation defines the shared message protocol used by the agent
-// loop and context-management components.
-package conversation
+// Package agent 定义 Agent Loop 使用的核心协议与执行边界。
+package agent
 
 type Role string
 
@@ -17,6 +16,8 @@ const (
 	BlockToolResult BlockType = "tool_result"
 )
 
+// ContentBlock 表示一段结构化消息内容。
+// 当前项目仅支持 Anthropic 客户端工具协议需要的三种 block。
 type ContentBlock struct {
 	Type      BlockType      `json:"type"`
 	Text      string         `json:"text,omitempty"`
@@ -26,6 +27,8 @@ type ContentBlock struct {
 	IsError   bool           `json:"is_error,omitempty"`
 }
 
+// Message 表示一个 user 或 assistant 对话回合。
+// Content 是纯文本的便捷表示；Blocks 非空时以 Blocks 为准。
 type Message struct {
 	Role    Role           `json:"role"`
 	Content string         `json:"content,omitempty"`

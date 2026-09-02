@@ -6,10 +6,10 @@ import (
 	"io"
 	"strings"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-
 	"go-agent-harness/config"
+	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
+	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
 	"go-agent-harness/loop"
 )
@@ -17,8 +17,7 @@ import (
 const maxTurns = 30
 
 type Manager struct {
-	client   anthropic.Client
-	model    string
+	client   agent.Model
 	registry *loop.Registry
 	hooks    *hooks.Manager
 	out      io.Writer
@@ -29,8 +28,7 @@ func New(cfg config.LLMConfig, registry *loop.Registry, hookManager *hooks.Manag
 		hookManager = hooks.NewManager()
 	}
 	return &Manager{
-		client:   loop.NewAnthropicClient(cfg),
-		model:    cfg.Model,
+		client:   llmmodel.NewAnthropic(cfg),
 		registry: registry,
 		hooks:    hookManager,
 		out:      out,
@@ -59,18 +57,17 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 	finished := false
 
 	for range maxTurns {
-		resp, err := m.client.Messages.New(ctx, anthropic.MessageNewParams{
+		resp, err := m.client.Complete(ctx, agent.ModelRequest{
 			MaxTokens: 8000,
-			Model:     anthropic.Model(m.model),
-			Messages:  loop.ToAnthropicMessages(messages),
-			Tools:     loop.ToolParams(m.registry),
-			System:    []anthropic.TextBlockParam{{Text: prompt.Subagent()}},
+			Messages:  messages,
+			Tools:     m.registry.Specs(),
+			System:    prompt.Subagent(),
 		})
 		if err != nil {
 			return "", err
 		}
 
-		assistantMessage := loop.ParseAnthropicAssistantMessage(resp.Content)
+		assistantMessage := resp.Message
 		messages = append(messages, assistantMessage)
 
 		if !hasToolUse(assistantMessage) {

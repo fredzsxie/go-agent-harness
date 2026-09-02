@@ -18,7 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"go-agent-harness/internal/conversation"
+	"go-agent-harness/internal/agent"
 )
 
 const (
@@ -28,24 +28,24 @@ const (
 	MaxConsolidatedRecords      = 30
 )
 
-type Role = conversation.Role
+type Role = agent.Role
 
 const (
-	RoleUser      = conversation.RoleUser
-	RoleAssistant = conversation.RoleAssistant
+	RoleUser      = agent.RoleUser
+	RoleAssistant = agent.RoleAssistant
 )
 
-type BlockType = conversation.BlockType
+type BlockType = agent.BlockType
 
 const (
-	BlockText       = conversation.BlockText
-	BlockToolUse    = conversation.BlockToolUse
-	BlockToolResult = conversation.BlockToolResult
+	BlockText       = agent.BlockText
+	BlockToolUse    = agent.BlockToolUse
+	BlockToolResult = agent.BlockToolResult
 )
 
-type ContentBlock = conversation.ContentBlock
+type ContentBlock = agent.ContentBlock
 
-type Message = conversation.Message
+type Message = agent.Message
 
 type Type string
 

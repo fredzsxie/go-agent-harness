@@ -1,33 +1,27 @@
 package loop
 
-import "go-agent-harness/internal/conversation"
+import "go-agent-harness/internal/agent"
 
-type Role = conversation.Role
-
-const (
-	RoleUser      = conversation.RoleUser
-	RoleAssistant = conversation.RoleAssistant
-)
-
-type BlockType = conversation.BlockType
+type Role = agent.Role
 
 const (
-	BlockText       = conversation.BlockText
-	BlockToolUse    = conversation.BlockToolUse
-	BlockToolResult = conversation.BlockToolResult
+	RoleUser      = agent.RoleUser
+	RoleAssistant = agent.RoleAssistant
 )
 
-type ContentBlock = conversation.ContentBlock
+type BlockType = agent.BlockType
 
-type Message = conversation.Message
+const (
+	BlockText       = agent.BlockText
+	BlockToolUse    = agent.BlockToolUse
+	BlockToolResult = agent.BlockToolResult
+)
 
-// ToolSpec: Tool Specification
-type ToolSpec struct {
-	Name        string
-	Description string
-	Required    []string
-	Properties  map[string]any
-}
+type ContentBlock = agent.ContentBlock
+
+type Message = agent.Message
+
+type ToolSpec = agent.ToolSpec
 
 type RunResult struct {
 	Messages []Message
