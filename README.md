@@ -313,7 +313,7 @@ CLI 提示、Agent 最终回答、Todo 展示和权限确认属于交互输出�
 
 ```text
 go-agent-harness/
-├── cmd/agent/main.go
+├── main.go            # 程序入口
 └── internal/
     ├── config/       # 环境与模型配置
     ├── app/          # CLI 与依赖装配
@@ -353,7 +353,7 @@ MODEL_ID=claude-sonnet-4-6
 运行：
 
 ```bash
-go run ./cmd/agent
+go run .
 ```
 
 验证：
