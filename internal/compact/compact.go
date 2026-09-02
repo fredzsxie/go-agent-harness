@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/logging"
 )
 
 const (
@@ -107,8 +108,7 @@ func (m *Manager) MaxReactiveRetries() int {
 }
 
 func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, bool, error) {
-	fmt.Printf("[Prepare] L3 compact\n")
-	// fmt.Printf("[Prepare] before L3 compact: %+v\n", messages)
+	logging.Println("[Prepare] L3 compact")
 	prepared, err := m.ToolResultBudget(messages)
 	if err != nil {
 		return messages, false, err
@@ -117,23 +117,20 @@ func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Sum
 		return prepared, false, nil
 	}
 
-	fmt.Printf("[Prepare] L1 compact\n")
-	// fmt.Printf("[Prepare] before L1 compact: %+v\n", prepared)
+	logging.Println("[Prepare] L1 compact")
 	prepared = m.SnipCompact(prepared)
 	if EstimateSize(prepared) <= m.cfg.ContextLimit {
 		return prepared, false, nil
 	}
 
-	fmt.Printf("[Prepare] L2 compact\n")
-	// fmt.Printf("[Prepare] before L2 compact: %+v\n", prepared)
+	logging.Println("[Prepare] L2 compact")
 	prepared = m.MicroCompact(prepared)
-	// fmt.Printf("[Prepare] after L2 compact: %+v\n", prepared)
 	if EstimateSize(prepared) <= m.cfg.ContextLimit {
 		return prepared, false, nil
 	}
 
 	// 如果经过三层压缩后，上下文仍旧超过长度，则调用LLM来进一步压缩
-	fmt.Printf("[Prepare] L4 compact, content: %v\n", prepared)
+	logging.Printf("[Prepare] L4 compact, content: %v", prepared)
 	compacted, err := m.CompactHistory(ctx, prepared, summarize)
 	if err != nil {
 		return prepared, false, err
@@ -192,7 +189,6 @@ func (m *Manager) SnipCompact(messages []Message) []Message {
 	})
 	out = append(out, messages[tailStart:]...)
 
-	// fmt.Printf("[Context Compact - L1]: result: %+v\n\n", out)
 	return out
 }
 
@@ -233,7 +229,6 @@ func (m *Manager) MicroCompact(messages []Message) []Message {
 		}
 	}
 
-	// fmt.Printf("[Context Compact - L2]: result: %+v\n\n", out)
 	return out
 }
 
@@ -323,7 +318,6 @@ func (m *Manager) ReactiveCompact(ctx context.Context, messages []Message, summa
 	out = append(out, Message{Role: RoleUser, Content: "[Reactive compact]\n\n" + summary})
 	out = append(out, messages[tailStart:]...)
 
-	// fmt.Printf("[Context Compact - Reactive Compact]: result: %+v\n\n", out)
 	return out, nil
 }
 
@@ -356,7 +350,6 @@ func (m *Manager) compactWithPrefix(ctx context.Context, messages []Message, sum
 		return nil, err
 	}
 
-	// fmt.Printf("[Context Compact - L4]: compacted summary: %+v\n\n", summary)
 	return []Message{{Role: RoleUser, Content: prefix + "\n\n" + summary}}, nil
 }
 

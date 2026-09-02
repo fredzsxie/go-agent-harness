@@ -14,6 +14,7 @@ import (
 	"github.com/chzyer/readline"
 
 	"go-agent-harness/config"
+	"go-agent-harness/internal/logging"
 	"go-agent-harness/internal/prompt"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/skill"
@@ -34,6 +35,7 @@ type App struct {
 }
 
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
+	logging.SetOutput(out)
 	workDir, err := os.Getwd()
 	if err != nil {
 		workDir = "."
@@ -188,7 +190,7 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 // startCronRuntime 分离“检查到期时间”和“等待 Agent 空闲后投递”两个循环。
 func (a *App) startCronRuntime(parent context.Context) func() {
 	if err := a.cron.Load(); err != nil {
-		fmt.Fprintf(a.out, "  [cron] %v\n", err)
+		logging.Printf("[cron] %v", err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
@@ -239,7 +241,7 @@ func (a *App) runScheduledTurn(ctx context.Context) {
 	start := len(a.messages)
 	for _, job := range jobs {
 		a.messages = append(a.messages, loop.Message{Role: loop.RoleUser, Content: "[Scheduled] " + job.Prompt})
-		fmt.Printf("  [cron] delivered %s: %s\n", job.ID, previewText(job.Prompt, 60))
+		logging.Printf("[cron] delivered %s: %s", job.ID, previewText(job.Prompt, 60))
 	}
 
 	// 定时 turn 无人值守，权限 hook 不得读取终端等待人工确认。
@@ -251,12 +253,12 @@ func (a *App) runScheduledTurn(ctx context.Context) {
 	if err != nil {
 		a.messages = a.messages[:start]
 		a.cron.Restore(jobs)
-		fmt.Fprintf(a.out, "  [cron] delivery failed: %v\n", err)
+		logging.Printf("[cron] delivery failed: %v", err)
 		return
 	}
 	a.messages = result.Messages
 	if err := a.cron.Acknowledge(jobs); err != nil {
-		fmt.Fprintf(a.out, "  [cron] acknowledgement failed: %v\n", err)
+		logging.Printf("[cron] acknowledgement failed: %v", err)
 	}
 	if result.Output != "" {
 		fmt.Fprintln(a.out, result.Output)

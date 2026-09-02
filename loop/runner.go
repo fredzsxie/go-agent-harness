@@ -13,6 +13,7 @@ import (
 	"go-agent-harness/internal/agentctx"
 	"go-agent-harness/internal/compact"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/logging"
 	"go-agent-harness/internal/memory"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
@@ -111,7 +112,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		sessionMessages = prepared
 
 		turn, err := r.worker.RunTurn(ctx, systemPrompt, sessionMessages, r.interceptTool)
-		fmt.Println("[LLM] Main llm calling done.")
+		logging.Println("[LLM] Main LLM calling done.")
 		if err != nil {
 			// 已产生 assistant 消息说明错误来自工具阶段，不应按模型上下文超限重试。
 			if turn.Assistant.Role != "" {
@@ -151,13 +152,13 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 			extractionMessages := append(CloneMessages(extractionSource), assistantMessage)
 			report := r.context.Finalize(ctx, extractionMessages, r.extractMemories, r.consolidateMemories)
 			if report.ExtractError != nil {
-				fmt.Printf("[Memory: extraction skipped: %v]\n", report.ExtractError)
+				logging.Printf("[Memory] extraction skipped: %v", report.ExtractError)
 			} else if report.Extracted > 0 {
-				fmt.Printf("[Memory: extracted %d new memories]\n", report.Extracted)
+				logging.Printf("[Memory] extracted %d new memories", report.Extracted)
 				if report.ConsolidateErr != nil {
-					fmt.Printf("[Memory: consolidation skipped: %v]\n", report.ConsolidateErr)
+					logging.Printf("[Memory] consolidation skipped: %v", report.ConsolidateErr)
 				} else if report.Before != report.After {
-					fmt.Printf("[Memory: consolidated %d -> %d memories]\n", report.Before, report.After)
+					logging.Printf("[Memory] consolidated %d -> %d memories", report.Before, report.After)
 				}
 			}
 
@@ -304,7 +305,7 @@ func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []compact
 			parts = append(parts, block.Text)
 		}
 	}
-	fmt.Println("[LLM] Summarize compact history done.")
+	logging.Println("[LLM] Summarize compact history done.")
 	return strings.TrimSpace(strings.Join(parts, "\n")), nil
 }
 
@@ -341,7 +342,7 @@ func (r *Runner) selectRelevantMemories(ctx context.Context, recent string, cata
 	if len(indices) > maxItems {
 		indices = indices[:maxItems]
 	}
-	fmt.Printf("[LLM] Select relevant memories (indices:%v) done.\n", indices)
+	logging.Printf("[LLM] Select relevant memories (indices:%v) done.", indices)
 	return indices, nil
 }
 
@@ -378,7 +379,7 @@ func (r *Runner) extractMemories(ctx context.Context, dialogue string, existing 
 	if err := json.Unmarshal([]byte(extractJSONArray(responseText(resp.Message))), &records); err != nil {
 		return nil, err
 	}
-	fmt.Println("[LLM] Extract memories done.")
+	logging.Println("[LLM] Extract memories done.")
 	return records, nil
 }
 
@@ -406,7 +407,7 @@ func (r *Runner) consolidateMemories(ctx context.Context, records []memory.Recor
 	if err := json.Unmarshal([]byte(extractJSONArray(responseText(resp.Message))), &next); err != nil {
 		return nil, err
 	}
-	fmt.Println("[LLM] Consolidate memories done.")
+	logging.Println("[LLM] Consolidate memories done.")
 	return next, nil
 }
 

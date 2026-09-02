@@ -8,6 +8,7 @@ import (
 
 	"go-agent-harness/config"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/logging"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
 	"go-agent-harness/loop"
@@ -17,14 +18,13 @@ const maxTurns = 30
 
 type Manager struct {
 	worker *loop.Worker
-	out    io.Writer
 }
 
 func New(cfg config.LLMConfig, registry *loop.Registry, hookManager *hooks.Manager, out io.Writer) *Manager {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
-	return &Manager{worker: loop.NewWorker(llmmodel.NewAnthropic(cfg), registry, hookManager), out: out}
+	return &Manager{worker: loop.NewWorker(llmmodel.NewAnthropic(cfg), registry, hookManager)}
 }
 
 func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
@@ -87,8 +87,5 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 }
 
 func (m *Manager) logf(format string, args ...any) {
-	if m.out == nil {
-		return
-	}
-	_, _ = fmt.Fprintf(m.out, format, args...)
+	logging.Printf(format, args...)
 }

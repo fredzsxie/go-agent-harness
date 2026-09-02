@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"go-agent-harness/internal/logging"
 	"go-agent-harness/internal/workspace"
 )
 
@@ -103,7 +104,7 @@ func (m *Manager) Create(subject, description string) (Task, error) {
 			_ = file.Close()
 		}
 		if err == nil {
-			fmt.Printf("[Task] Created %s: %s\n", task.ID, task.Subject)
+			logging.Printf("[Task] Created %s: %s", task.ID, task.Subject)
 		}
 		return task, err
 	}
@@ -213,7 +214,7 @@ func (m *Manager) AddBlockedBy(id string, dependencies []string) (Task, error) {
 	if err := m.save(task); err != nil {
 		return Task{}, err
 	}
-	fmt.Printf("[Task] Updated %s blockedBy: %s\n", task.ID, strings.Join(task.BlockedBy, ", "))
+	logging.Printf("[Task] Updated %s blockedBy: %s", task.ID, strings.Join(task.BlockedBy, ", "))
 	return task, nil
 }
 
@@ -242,7 +243,7 @@ func (m *Manager) Claim(id, owner string) (Task, error) {
 	if err := m.save(task); err != nil {
 		return Task{}, err
 	}
-	fmt.Printf("[Task] Claimed %s: %s (owner: %s)\n", task.ID, task.Subject, owner)
+	logging.Printf("[Task] Claimed %s: %s (owner: %s)", task.ID, task.Subject, owner)
 	return task, nil
 }
 
@@ -280,13 +281,13 @@ func (m *Manager) Complete(id, owner string) (Task, []Task, error) {
 			unblocked = append(unblocked, candidate)
 		}
 	}
-	fmt.Printf("[Task] Completed %s: %s\n", task.ID, task.Subject)
+	logging.Printf("[Task] Completed %s: %s", task.ID, task.Subject)
 	if len(unblocked) > 0 {
 		subjects := make([]string, len(unblocked))
 		for i := range unblocked {
 			subjects[i] = unblocked[i].Subject
 		}
-		fmt.Printf("[Task] Unblocked: %s\n", strings.Join(subjects, ", "))
+		logging.Printf("[Task] Unblocked: %s", strings.Join(subjects, ", "))
 	}
 	return task, unblocked, nil
 }

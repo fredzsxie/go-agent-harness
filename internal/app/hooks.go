@@ -3,21 +3,20 @@ package app
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync/atomic"
 
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/logging"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/workspace"
 )
 
 func newDefaultHooks(out io.Writer, nonInteractive *atomic.Bool) *hooks.Manager {
 	hookManager := hooks.NewManager()
-	writer := outputWriter(out)
 	// ----- UserPromptSubmit -----
 	registerHook(hookManager, hooks.EventUserPromptSubmit, func(_ string) {
-		_, _ = fmt.Fprintf(writer, "[HOOK] UserPromptSubmit: working in %s\n", workspace.Root())
+		logging.Printf("[HOOK] UserPromptSubmit: working in %s", workspace.Root())
 	})
 
 	// ----- PreToolUse -----
@@ -32,30 +31,23 @@ func newDefaultHooks(out io.Writer, nonInteractive *atomic.Bool) *hooks.Manager 
 		return ""
 	})
 	registerHook(hookManager, hooks.EventPreToolUse, func(call hooks.ToolCall) string {
-		_, _ = fmt.Fprintf(writer, "[HOOK] %s(%s)\n", call.Name, previewInput(call.Input))
+		logging.Printf("[HOOK] %s(%s)", call.Name, previewInput(call.Input))
 		return ""
 	})
 
 	// ----- PostToolUse -----
 	registerHook(hookManager, hooks.EventPostToolUse, func(call hooks.ToolCall, output string) {
 		if len(output) > 100000 {
-			_, _ = fmt.Fprintf(writer, "[HOOK] Large output from %s: %d chars\n", call.Name, len(output))
+			logging.Printf("[HOOK] Large output from %s: %d chars", call.Name, len(output))
 		}
 	})
 
 	// ----- Stop -----
 	registerHook(hookManager, hooks.EventStop, func(ctx hooks.StopContext) string {
-		_, _ = fmt.Fprintf(writer, "[HOOK] Stop: session used %d tool calls\n", ctx.ToolCallCnt)
+		logging.Printf("[HOOK] Stop: session used %d tool calls", ctx.ToolCallCnt)
 		return ""
 	})
 	return hookManager
-}
-
-func outputWriter(out io.Writer) io.Writer {
-	if out != nil {
-		return out
-	}
-	return os.Stdout
 }
 
 func registerHook(manager *hooks.Manager, event hooks.Event, callback any) {

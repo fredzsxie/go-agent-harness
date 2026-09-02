@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-agent-harness/internal/logging"
 )
 
 const commandTimeout = 120 * time.Second
@@ -73,7 +75,7 @@ func (m *BackgroundManager) Start(command string) (string, error) {
 	m.mu.Unlock()
 
 	// 任务登记完成后再启动 goroutine，确保极快完成的命令也能找到自己的状态。
-	fmt.Printf("  [Background] started %s: %s\n", id, preview(command, 60))
+	logging.Printf("[Background] started %s: %s", id, preview(command, 60))
 	go m.run(id, command)
 	return id, nil
 }
@@ -132,7 +134,7 @@ func (m *BackgroundManager) Collect() []string {
 			current.id, current.status, escape(current.command), escape(truncate(current.result, 500)),
 		))
 		// 只在结果真正交付给主循环时记录 collected，便于区分“已完成”和“已消费”。
-		fmt.Printf("  [Background] collected %s: %s\n", current.id, current.status)
+		logging.Printf("[Background] collected %s: %s", current.id, current.status)
 	}
 	return notifications
 }
