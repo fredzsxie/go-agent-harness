@@ -23,6 +23,11 @@ type ModelResponse struct {
 	Message Message
 }
 
+type RunResult struct {
+	Messages []Message
+	Output   string
+}
+
 // Model 隔离具体 LLM SDK，使主 Agent、Subagent 和上下文能力复用同一调用边界。
 type Model interface {
 	Complete(ctx context.Context, request ModelRequest) (ModelResponse, error)

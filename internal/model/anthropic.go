@@ -7,8 +7,8 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"go-agent-harness/config"
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/config"
 )
 
 // Anthropic 使用 Anthropic Messages API 实现 agent.Model。

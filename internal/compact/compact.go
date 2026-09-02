@@ -1,8 +1,5 @@
-// Package compact implements the s08 context compaction pipeline.
-//
-// The package is intentionally independent from the Anthropic SDK and the loop
-// package. Callers provide a summarizer callback when LLM-backed compaction is
-// needed.
+// Package compact 实现 s08 上下文压缩流水线。
+// 本包不依赖 Anthropic SDK；需要 LLM 摘要时由调用方传入 Summarizer。
 package compact
 
 import (
@@ -17,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"go-agent-harness/internal/agent"
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/logger"
+	"go-agent-harness/internal/protocol"
 )
 
 const (
@@ -31,24 +28,24 @@ const (
 	DefaultMaxReactiveRetries    = 1
 )
 
-type Role = agent.Role
+type Role = protocol.Role
 
 const (
-	RoleUser      = agent.RoleUser
-	RoleAssistant = agent.RoleAssistant
+	RoleUser      = protocol.RoleUser
+	RoleAssistant = protocol.RoleAssistant
 )
 
-type BlockType = agent.BlockType
+type BlockType = protocol.BlockType
 
 const (
-	BlockText       = agent.BlockText
-	BlockToolUse    = agent.BlockToolUse
-	BlockToolResult = agent.BlockToolResult
+	BlockText       = protocol.BlockText
+	BlockToolUse    = protocol.BlockToolUse
+	BlockToolResult = protocol.BlockToolResult
 )
 
-type ContentBlock = agent.ContentBlock
+type ContentBlock = protocol.ContentBlock
 
-type Message = agent.Message
+type Message = protocol.Message
 
 type Summarizer func(ctx context.Context, messages []Message) (string, error)
 
@@ -108,7 +105,7 @@ func (m *Manager) MaxReactiveRetries() int {
 }
 
 func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, bool, error) {
-	logging.Println("[Prepare] L3 compact")
+	logger.Info("[Prepare] L3 compact")
 	prepared, err := m.ToolResultBudget(messages)
 	if err != nil {
 		return messages, false, err
@@ -117,20 +114,20 @@ func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Sum
 		return prepared, false, nil
 	}
 
-	logging.Println("[Prepare] L1 compact")
+	logger.Info("[Prepare] L1 compact")
 	prepared = m.SnipCompact(prepared)
 	if EstimateSize(prepared) <= m.cfg.ContextLimit {
 		return prepared, false, nil
 	}
 
-	logging.Println("[Prepare] L2 compact")
+	logger.Info("[Prepare] L2 compact")
 	prepared = m.MicroCompact(prepared)
 	if EstimateSize(prepared) <= m.cfg.ContextLimit {
 		return prepared, false, nil
 	}
 
 	// 如果经过三层压缩后，上下文仍旧超过长度，则调用LLM来进一步压缩
-	logging.Printf("[Prepare] L4 compact, content: %v", prepared)
+	logger.Info("[Prepare] L4 compact, content: %v", prepared)
 	compacted, err := m.CompactHistory(ctx, prepared, summarize)
 	if err != nil {
 		return prepared, false, err
@@ -204,9 +201,7 @@ func (m *Manager) MicroCompact(messages []Message) []Message {
 
 	consumed := make([]toolResultPosition, 0, len(positions))
 	for _, pos := range positions {
-		// Results after the latest assistant message have not yet been observed by
-		// the model. Preserve the whole batch, even when it exceeds the normal
-		// recent-result count.
+		// 最新 assistant 消息后的结果尚未被模型消费，即使超过常规数量也必须保留整个批次。
 		if lastAssistant >= 0 && pos.messageIndex > lastAssistant {
 			continue
 		}

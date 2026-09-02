@@ -1,5 +1,5 @@
-// Package loop 中的 ToolExecutor 统一封装 tool_use 的执行流程。
-package loop
+// ToolExecutor 统一封装 tool_use 的执行流程。
+package agent
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"go-agent-harness/internal/hooks"
 )
 
-// ToolOutcome 表示拦截器生成的工具结果及其对会话历史的影响。
+// ToolOutcome 表示工具调用结果及其对会话历史的影响。
 type ToolOutcome struct {
 	Text     string
 	IsError  bool

@@ -1,4 +1,4 @@
-// Package prompt builds system prompts from stable sections and runtime state.
+// Package prompt 根据稳定片段与运行时状态组装 System Prompt。
 package prompt
 
 import (
@@ -7,18 +7,14 @@ import (
 	"strings"
 )
 
-// Context contains the real runtime state that controls conditional prompt
-// sections. It deliberately does not inspect user messages: a section should
-// be enabled by available capabilities, not keyword guesses.
+// Context 保存控制条件 Prompt 片段的真实运行时状态，不通过用户消息关键词猜测能力。
 type Context struct {
 	EnabledTools []string `json:"enabled_tools"`
 	Workspace    string   `json:"workspace"`
 	Memories     string   `json:"memories"`
 }
 
-// Builder assembles and caches the main-agent system prompt. The cache avoids
-// redundant string assembly only; API-level prompt caching is handled by the
-// model provider.
+// Builder 组装并缓存主 Agent 的 System Prompt；这里只减少字符串组装，API Prompt Cache 由模型供应商处理。
 type Builder struct {
 	skillCatalog string
 	workspace    string
@@ -37,9 +33,7 @@ func NewBuilder(skillCatalog, workspace string) *Builder {
 	}
 }
 
-// Get returns an assembled prompt, reusing the previous result when context is
-// unchanged. JSON serialization is deterministic for maps and nested values,
-// unlike Go values used directly as cache keys.
+// Get 在 Context 未变化时复用上次结果；JSON 序列化为 map 和嵌套值提供稳定的缓存键。
 func (b *Builder) Get(context Context) string {
 	context = b.normalize(context)
 	key, err := json.Marshal(context)
@@ -99,8 +93,7 @@ func hasTool(tools []string, target string) bool {
 	return index < len(tools) && tools[index] == target
 }
 
-// Main is retained for callers that need a static prompt. New code should use
-// Builder with a runtime Context.
+// Main 为静态 Prompt 调用方保留；新代码应使用 Builder 和运行时 Context。
 func Main(skillCatalog string, memorySections ...string) string {
 	return Build(NewBuilder(skillCatalog, "").Get(Context{}), Build(memorySections...))
 }

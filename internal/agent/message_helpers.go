@@ -1,6 +1,6 @@
-// Package loop 中的 message 辅助函数负责消息克隆、tool input 归一化
+// message 辅助函数负责消息克隆、tool input 归一化
 // 以及最近一次 user / assistant 文本提取，供主循环和子能力复用。
-package loop
+package agent
 
 import (
 	"encoding/json"

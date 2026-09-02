@@ -1,12 +1,13 @@
+// Command agent 启动交互式 coding agent harness。
 package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
-	"go-agent-harness/config"
 	"go-agent-harness/internal/app"
+	"go-agent-harness/internal/config"
+	"go-agent-harness/internal/logger"
 )
 
 func main() {
@@ -23,6 +24,6 @@ func main() {
 }
 
 func exit(err error) {
-	fmt.Fprintln(os.Stderr, err)
+	logger.Error("%v", err)
 	os.Exit(1)
 }

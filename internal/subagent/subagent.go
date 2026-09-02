@@ -3,28 +3,25 @@ package subagent
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
-	"go-agent-harness/config"
+	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
-	"go-agent-harness/internal/logging"
-	llmmodel "go-agent-harness/internal/model"
+	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/prompt"
-	"go-agent-harness/loop"
 )
 
 const maxTurns = 30
 
 type Manager struct {
-	worker *loop.Worker
+	worker *agent.Worker
 }
 
-func New(cfg config.LLMConfig, registry *loop.Registry, hookManager *hooks.Manager, out io.Writer) *Manager {
+func New(model agent.Model, registry *agent.Registry, hookManager *hooks.Manager) *Manager {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
-	return &Manager{worker: loop.NewWorker(llmmodel.NewAnthropic(cfg), registry, hookManager)}
+	return &Manager{worker: agent.NewWorker(model, registry, hookManager)}
 }
 
 func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
@@ -43,9 +40,9 @@ func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
 }
 
 func (m *Manager) spawn(ctx context.Context, description string) (string, error) {
-	m.logf("\n[Subagent spawned]\n")
+	logger.Info("[Subagent] spawned")
 
-	messages := []loop.Message{{Role: loop.RoleUser, Content: description}}
+	messages := []agent.Message{{Role: agent.RoleUser, Content: description}}
 	finished := false
 
 	for range maxTurns {
@@ -67,13 +64,13 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 			return "", fmt.Errorf("subagent requested tool_use without tool blocks")
 		}
 
-		messages = append(messages, loop.Message{
-			Role:   loop.RoleUser,
+		messages = append(messages, agent.Message{
+			Role:   agent.RoleUser,
 			Blocks: toolResults,
 		})
 	}
 
-	result := loop.LatestAssistantText(messages)
+	result := agent.LatestAssistantText(messages)
 	if strings.TrimSpace(result) == "" {
 		if finished {
 			result = "(no summary)"
@@ -82,10 +79,6 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 		}
 	}
 
-	m.logf("[Subagent done]\n\n")
+	logger.Info("[Subagent] done")
 	return strings.TrimSpace(result), nil
-}
-
-func (m *Manager) logf(format string, args ...any) {
-	logging.Printf(format, args...)
 }

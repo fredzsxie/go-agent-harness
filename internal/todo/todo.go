@@ -136,8 +136,7 @@ func parseTodoString(encoded string) ([]any, error) {
 	if err := json.Unmarshal([]byte(encoded), &parsed); err == nil {
 		return parsed, nil
 	}
-	// YAML safely accepts the simple single-quoted list representation emitted
-	// by some OpenAI-compatible providers. It does not evaluate expressions.
+	// YAML 可安全解析部分 OpenAI-compatible provider 返回的单引号列表，且不会执行表达式。
 	if err := yaml.Unmarshal([]byte(encoded), &parsed); err != nil {
 		return nil, fmt.Errorf("todos must be an array or encoded array")
 	}

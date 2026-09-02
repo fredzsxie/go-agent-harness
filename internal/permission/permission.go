@@ -27,7 +27,7 @@ Three gates inserted before tool execution:
       (normal)     (blocked)    (ask user)   (user says no?)
 */
 
-// Gate 1: Hard deny list — always forbidden
+// Gate 1：硬拒绝列表，任何情况下都不允许执行。
 var DenyList = []string{
 	"rm -rf /",
 	"sudo",
@@ -47,7 +47,7 @@ func CheckDenyList(command string) string {
 	return ""
 }
 
-// Gate 2: Rule matching — context-dependent checks
+// Gate 2：根据工具参数匹配需要人工审批的规则。
 type Rule struct {
 	Tools   []string
 	Check   func(args map[string]any) bool
@@ -101,7 +101,7 @@ func pathEscapesWorkspace(path string) bool {
 	return err != nil
 }
 
-// Gate 3: User approval — wait for confirmation after rule match
+// Gate 3：规则命中后等待用户确认。
 func AskUser(toolName string, args map[string]any, reason string) string {
 	fmt.Printf("\n⚠  %s\n", reason)
 	fmt.Printf("   Tool: %s(%v)\n", toolName, args)
@@ -116,7 +116,7 @@ func AskUser(toolName string, args map[string]any, reason string) string {
 	return "deny"
 }
 
-// Authorize chains all three gates before a tool executes.
+// Authorize 在工具执行前依次通过三道权限闸门。
 func Authorize(toolName string, args map[string]any) error {
 	return authorize(toolName, args, true)
 }
@@ -147,7 +147,7 @@ func authorize(toolName string, args map[string]any, interactive bool) error {
 	return nil
 }
 
-// CheckPermission is kept as a boolean teaching helper for s03.
+// CheckPermission 作为 s03 的布尔教学辅助方法保留。
 func CheckPermission(toolName string, args map[string]any) bool {
 	return Authorize(toolName, args) == nil
 }

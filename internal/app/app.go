@@ -13,68 +13,68 @@ import (
 
 	"github.com/chzyer/readline"
 
-	"go-agent-harness/config"
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/config"
+	"go-agent-harness/internal/logger"
+	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/todo"
-	"go-agent-harness/loop"
 )
 
 type App struct {
-	runner         *loop.Runner
+	session        *agent.Session
 	cron           *agentruntime.CronScheduler
-	messages       []loop.Message
-	agentMu        sync.Mutex
 	nonInteractive *atomic.Bool
 	in             io.Reader
 	out            io.Writer
 }
 
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
-	logging.SetOutput(out)
+	logger.SetOutput(out)
 	workDir, err := os.Getwd()
 	if err != nil {
 		workDir = "."
 	}
 	nonInteractive := &atomic.Bool{}
+	model := llmmodel.NewAnthropic(cfg)
 
-	// initial basic tools & hooks
+	// 先组装基础工具与 Hooks，再按章节能力扩展主 Agent 工具池。
 	registry := newDefaultRegistry()
-	hookManager := newDefaultHooks(out, nonInteractive)
+	hookManager := newDefaultHooks(nonInteractive)
 
-	// initial todo_write
+	// TodoWrite 只维护当前 Session 的临时计划。
 	todoManager := todo.NewManager(out)
 	registerTodoTool(registry, todoManager)
 
-	// initial subagent
+	// Subagent 使用独立且受限的工具池。
 	subRegistry := newSubagentRegistry()
-	subagentManager := subagent.New(cfg, subRegistry, hookManager, out)
+	subagentManager := subagent.New(model, subRegistry, hookManager)
 	registerTaskTool(registry, subagentManager)
 
-	// initial task_system
+	// Task System 维护跨 Session 的持久任务图。
 	taskManager := task.New(task.Config{})
 	registerTaskSystemTools(registry, taskManager)
 
-	// initial cron tool
+	// Cron Scheduler 只注册到主 Agent。
 	cronManager := agentruntime.NewCron(agentruntime.CronConfig{WorkDir: workDir})
 	registerCronTools(registry, cronManager)
 
-	// init skill list
+	// System Prompt 常驻 Skill 目录，正文由工具按需加载。
 	skillManager := skill.New()
 	skillCatalog := skillManager.ListSkills()
 	registerSkillTool(registry, skillManager)
 
-	// init context compact module
+	// Compact 是由 Runner 处理会话状态的控制工具。
 	registerCompactTool(registry)
 
+	runner := agent.NewRunnerWithPromptBuilder(model, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir))
 	return &App{
-		runner:         loop.NewRunnerWithPromptBuilder(cfg, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir)),
+		session:        agent.NewSession(runner),
 		cron:           cronManager,
-		messages:       make([]loop.Message, 0, 16),
 		nonInteractive: nonInteractive,
 		in:             in,
 		out:            out,
@@ -83,7 +83,7 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 
 func (a *App) Run(ctx context.Context) error {
 	// 无论正常退出还是读取失败，都要停止并回收后台命令。
-	defer a.runner.Close()
+	defer a.session.Close()
 	stopCron := a.startCronRuntime(ctx)
 	defer stopCron()
 
@@ -96,8 +96,7 @@ func (a *App) Run(ctx context.Context) error {
 	return a.runScanner(ctx)
 }
 
-// runInteractive uses readline for real terminals so cursor movement,
-// backspace, and wide Unicode characters are rendered consistently.
+// runInteractive 对真实终端使用 readline，保证光标、退格和宽字符显示正确。
 func (a *App) runInteractive(ctx context.Context, stdin, stdout *os.File) error {
 	lineReader, err := readline.NewEx(&readline.Config{
 		Prompt:                 "> ",
@@ -138,9 +137,7 @@ func (a *App) runInteractive(ctx context.Context, stdin, stdout *os.File) error 
 	}
 }
 
-// runScanner keeps stdin-piped and test-driven execution line-oriented. A
-// readline terminal requires a real TTY and raw-mode support, neither of
-// which is available for a bytes.Buffer or a redirected stdin.
+// runScanner 为重定向输入和测试保留逐行读取方式，这些输入不支持 TTY raw mode。
 func (a *App) runScanner(ctx context.Context) error {
 	scanner := bufio.NewScanner(a.in)
 
@@ -172,15 +169,10 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 		return false, nil
 	}
 
-	// 用户 turn 与定时 turn 共用同一会话，通过互斥锁保证一次只运行一个 Agent Loop。
-	a.agentMu.Lock()
-	defer a.agentMu.Unlock()
-	a.messages = append(a.messages, loop.Message{Role: loop.RoleUser, Content: userInput})
-	result, err := a.runner.Run(ctx, a.messages)
+	result, err := a.session.Submit(ctx, agent.Message{Role: agent.RoleUser, Content: userInput})
 	if err != nil {
 		return false, err
 	}
-	a.messages = result.Messages
 	if result.Output != "" {
 		fmt.Fprintln(a.out, result.Output)
 	}
@@ -190,7 +182,7 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 // startCronRuntime 分离“检查到期时间”和“等待 Agent 空闲后投递”两个循环。
 func (a *App) startCronRuntime(parent context.Context) func() {
 	if err := a.cron.Load(); err != nil {
-		logging.Printf("[cron] %v", err)
+		logger.Error("[cron] %v", err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
@@ -217,11 +209,8 @@ func (a *App) startCronRuntime(parent context.Context) func() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if a.cron.HasPending() && a.agentMu.TryLock() {
-					func() {
-						defer a.agentMu.Unlock()
-						a.runScheduledTurn(ctx)
-					}()
+				if a.cron.HasPending() {
+					a.runScheduledTurn(ctx)
 				}
 			}
 		}
@@ -232,33 +221,35 @@ func (a *App) startCronRuntime(parent context.Context) func() {
 	}
 }
 
-// runScheduledTurn 在持有 agentMu 时投递到期提示；调用失败则恢复队列以便至少投递一次。
+// runScheduledTurn 尝试向空闲 Session 投递到期提示；失败时恢复队列以保证至少投递一次。
 func (a *App) runScheduledTurn(ctx context.Context) {
 	jobs := a.cron.Consume()
 	if len(jobs) == 0 {
 		return
 	}
-	start := len(a.messages)
+	inputs := make([]agent.Message, 0, len(jobs))
 	for _, job := range jobs {
-		a.messages = append(a.messages, loop.Message{Role: loop.RoleUser, Content: "[Scheduled] " + job.Prompt})
-		logging.Printf("[cron] delivered %s: %s", job.ID, previewText(job.Prompt, 60))
+		inputs = append(inputs, agent.Message{Role: agent.RoleUser, Content: "[Scheduled] " + job.Prompt})
+		logger.Info("[cron] delivered %s: %s", job.ID, previewText(job.Prompt, 60))
 	}
 
-	// 定时 turn 无人值守，权限 hook 不得读取终端等待人工确认。
-	a.nonInteractive.Store(true)
-	result, err := func() (loop.RunResult, error) {
-		defer a.nonInteractive.Store(false)
-		return a.runner.Run(ctx, a.messages)
-	}()
-	if err != nil {
-		a.messages = a.messages[:start]
+	// 权限模式只在成功占用 Session 后切换，避免影响正在执行的用户 turn。
+	result, acquired, err := a.session.TrySubmit(ctx,
+		func() { a.nonInteractive.Store(true) },
+		func() { a.nonInteractive.Store(false) },
+		inputs...,
+	)
+	if !acquired {
 		a.cron.Restore(jobs)
-		logging.Printf("[cron] delivery failed: %v", err)
 		return
 	}
-	a.messages = result.Messages
+	if err != nil {
+		a.cron.Restore(jobs)
+		logger.Error("[cron] delivery failed: %v", err)
+		return
+	}
 	if err := a.cron.Acknowledge(jobs); err != nil {
-		logging.Printf("[cron] acknowledgement failed: %v", err)
+		logger.Error("[cron] acknowledgement failed: %v", err)
 	}
 	if result.Output != "" {
 		fmt.Fprintln(a.out, result.Output)

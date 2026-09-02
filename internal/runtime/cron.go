@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/workspace"
 )
 
@@ -221,7 +221,7 @@ func (m *CronScheduler) Schedule(expression, prompt string, recurring, durable b
 			return CronJob{}, err
 		}
 	}
-	logging.Printf("[cron] scheduled %s: %s -> %s", id, job.Cron, preview(prompt, 60))
+	logger.Info("[cron] scheduled %s: %s -> %s", id, job.Cron, preview(prompt, 60))
 	return *job, nil
 }
 
@@ -272,7 +272,7 @@ func (m *CronScheduler) Cancel(id string) error {
 			return err
 		}
 	}
-	logging.Printf("[cron] cancelled %s", id)
+	logger.Info("[cron] cancelled %s", id)
 	return nil
 }
 
@@ -297,12 +297,12 @@ func (m *CronScheduler) Poll(moment time.Time) {
 			if err := m.saveLocked(); err != nil {
 				job.PendingDelivery = false
 				job.LastFired = oldLast
-				logging.Printf("[cron] could not enqueue %s: %v", id, err)
+				logger.Error("[cron] could not enqueue %s: %v", id, err)
 				continue
 			}
 		}
 		m.queue = append(m.queue, id)
-		logging.Printf("[cron] due %s: %s", id, preview(job.Prompt, 60))
+		logger.Info("[cron] due %s: %s", id, preview(job.Prompt, 60))
 	}
 	m.mu.Unlock()
 }

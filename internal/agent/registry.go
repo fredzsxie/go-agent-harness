@@ -1,6 +1,5 @@
-// Package loop 中的 registry 维护工具定义与处理函数的注册表，
-// 为 runner 和子能力提供统一的工具调度入口。
-package loop
+// Registry 维护工具定义与 Handler，为主 Agent 和 Subagent 提供统一调度入口。
+package agent
 
 import (
 	"context"

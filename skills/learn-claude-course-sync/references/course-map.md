@@ -10,23 +10,23 @@
 
 | 课程 | 参考目录 | 当前项目主要落点 |
 | --- | --- | --- |
-| s01 | `s01_agent_loop/` | `loop/types.go`, `loop/runner.go` |
-| s02 | `s02_tool_use/` | `loop/registry.go`, `loop/tooluse.go`, `tools/` |
+| s01 | `s01_agent_loop/` | `internal/agent/runner.go`, `internal/protocol/` |
+| s02 | `s02_tool_use/` | `internal/agent/registry.go`, `internal/agent/tool_executor.go`, `internal/tool/builtin/` |
 | s03 | `s03_permission/` | `internal/permission/`, `internal/app/hooks.go` |
-| s04 | `s04_hooks/` | `internal/hooks/`, `loop/tooluse.go`, `internal/app/hooks.go` |
-| s05 | `s05_todo_write/` | `internal/todo/`, `internal/app/registry.go`, `loop/runner.go` |
+| s04 | `s04_hooks/` | `internal/hooks/`, `internal/agent/tool_executor.go`, `internal/app/hooks.go` |
+| s05 | `s05_todo_write/` | `internal/todo/`, `internal/app/registry.go`, `internal/agent/runner.go` |
 | s06 | `s06_subagent/` | `internal/subagent/`, `internal/app/registry.go` |
 | s07 | `s07_skill_loading/` | `internal/skill/`, `internal/prompt/`, `internal/app/` |
-| s08 | `s08_context_compact/` | `internal/compact/`, `loop/runner.go` |
+| s08 | `s08_context_compact/` | `internal/compact/`, `internal/agent/runner.go` |
 | s09 | `s09_memory/` | `internal/memory/`, `internal/prompt/` |
 | s10 | `s10_task_system/` | `internal/task/`, `internal/app/registry.go` |
-| s11 | `s11_background_tasks/` | `internal/scheduler/`, `loop/runner.go` |
-| s12 | `s12_cron_scheduler/` | `internal/scheduler/` |
-| s13 | `s13_agent_teams/` | `internal/team/`, `internal/task/`, `internal/worktree/`, `internal/workspace/` |
-| s14 | `s14_mcp_plugin/` | `loop/registry.go`, 后续可扩到 `internal/mcp/` |
-| s15 | `s15_integrated_harness/` | 全局联调，以 `loop/runner.go` 为中心 |
-| s16 | `s16_workflow_runtime/` | 后续可扩到 `internal/workflow/` |
-| s17 | `s17_goal_loop/` | `internal/hooks/`, 后续可扩到 `internal/goal/` |
+| s11 | `s11_background_tasks/` | `internal/runtime/background.go`, `internal/agent/runner.go` |
+| s12 | `s12_cron_scheduler/` | `internal/runtime/cron.go`, `internal/app/app.go` |
+| s13 | `s13_agent_teams/` | `internal/team/`, `internal/worktree/`，仅占位 |
+| s14 | `s14_mcp_plugin/` | `internal/mcp/`，仅占位 |
+| s15 | `s15_integrated_harness/` | `internal/app/` 组合根，仅预留 |
+| s16 | `s16_workflow_runtime/` | `internal/workflow/`，仅占位 |
+| s17 | `s17_goal_loop/` | `internal/goal/`，仅占位 |
 
 ## 阅读顺序
 
@@ -36,21 +36,21 @@
 2. 参考课 `code.py`
 3. 当前项目对应 feature package
 4. `internal/app/registry.go`
-5. `loop/runner.go` 或 `loop/tooluse.go`
+5. `internal/agent/runner.go` 或 `internal/agent/tool_executor.go`
 
 ## 差异处理规则
 
 - 参考版使用单文件时，当前项目按模块职责拆开实现。
 - 当前项目已有公共能力时，优先接到现有扩展点，不新造并行入口。
 - 行为一致比结构一致更重要。
-- 只有当课程目标明确要求，才修改主 loop 控制流。
+- 只有当课程目标明确要求，才修改 Agent Loop 控制流。
 
 ## 交付标准
 
 完成课程对齐后，至少要做到：
 
 1. 新逻辑能从当前 app 装配层真正接入运行时。
-2. 新工具能通过 `loop.Registry` 暴露。
+2. 新工具能通过 `agent.Registry` 暴露。
 3. 新状态不是散落在多个无关结构体里。
 4. 改动后的 Go 文件已 `gofmt`。
 5. `GOCACHE=/private/tmp/go-agent-harness-go-cache go test ./...` 通过。

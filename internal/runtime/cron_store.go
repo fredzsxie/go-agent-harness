@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/logger"
 )
 
 // Load 在进程启动时恢复 durable job；待投递任务同时回到内存队列。
@@ -39,15 +39,15 @@ func (m *CronScheduler) Load() error {
 		decoder := json.NewDecoder(bytes.NewReader(record))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&job); err != nil {
-			logging.Printf("[cron] skipped invalid saved job: %v", err)
+			logger.Error("[cron] skipped invalid saved job: %v", err)
 			continue
 		}
 		if err := validateCronJob(job); err != nil {
-			logging.Printf("[cron] skipped invalid saved job: %v", err)
+			logger.Error("[cron] skipped invalid saved job: %v", err)
 			continue
 		}
 		if _, exists := m.jobs[job.ID]; exists {
-			logging.Printf("[cron] skipped duplicate saved job: %s", job.ID)
+			logger.Error("[cron] skipped duplicate saved job: %s", job.ID)
 			continue
 		}
 		copyJob := job
@@ -58,7 +58,7 @@ func (m *CronScheduler) Load() error {
 		loaded++
 	}
 	if loaded > 0 {
-		logging.Printf("[cron] loaded %d durable job(s)", loaded)
+		logger.Info("[cron] loaded %d durable job(s)", loaded)
 	}
 	return nil
 }

@@ -3,8 +3,8 @@ package app
 import (
 	"testing"
 
+	"go-agent-harness/internal/agent"
 	agentruntime "go-agent-harness/internal/runtime"
-	"go-agent-harness/loop"
 )
 
 func TestBackgroundBashOptionIsMainAgentOnly(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCronToolsAreMainAgentOnly(t *testing.T) {
 	}
 }
 
-func toolNames(specs []loop.ToolSpec) map[string]bool {
+func toolNames(specs []agent.ToolSpec) map[string]bool {
 	names := make(map[string]bool, len(specs))
 	for _, spec := range specs {
 		names[spec.Name] = true

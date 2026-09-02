@@ -1,21 +1,20 @@
-package loop
+package agent
 
 import (
 	"context"
 	"testing"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 )
 
 type fakeModel struct {
 	response Message
-	requests []agent.ModelRequest
+	requests []ModelRequest
 }
 
-func (m *fakeModel) Complete(_ context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *fakeModel) Complete(_ context.Context, request ModelRequest) (ModelResponse, error) {
 	m.requests = append(m.requests, request)
-	return agent.ModelResponse{Message: m.response}, nil
+	return ModelResponse{Message: m.response}, nil
 }
 
 func TestWorkerRunsModelAndToolsThroughOnePath(t *testing.T) {

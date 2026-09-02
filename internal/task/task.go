@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/workspace"
 )
 
@@ -104,7 +104,7 @@ func (m *Manager) Create(subject, description string) (Task, error) {
 			_ = file.Close()
 		}
 		if err == nil {
-			logging.Printf("[Task] Created %s: %s", task.ID, task.Subject)
+			logger.Info("[Task] Created %s: %s", task.ID, task.Subject)
 		}
 		return task, err
 	}
@@ -214,7 +214,7 @@ func (m *Manager) AddBlockedBy(id string, dependencies []string) (Task, error) {
 	if err := m.save(task); err != nil {
 		return Task{}, err
 	}
-	logging.Printf("[Task] Updated %s blockedBy: %s", task.ID, strings.Join(task.BlockedBy, ", "))
+	logger.Info("[Task] Updated %s blockedBy: %s", task.ID, strings.Join(task.BlockedBy, ", "))
 	return task, nil
 }
 
@@ -243,7 +243,7 @@ func (m *Manager) Claim(id, owner string) (Task, error) {
 	if err := m.save(task); err != nil {
 		return Task{}, err
 	}
-	logging.Printf("[Task] Claimed %s: %s (owner: %s)", task.ID, task.Subject, owner)
+	logger.Info("[Task] Claimed %s: %s (owner: %s)", task.ID, task.Subject, owner)
 	return task, nil
 }
 
@@ -281,13 +281,13 @@ func (m *Manager) Complete(id, owner string) (Task, []Task, error) {
 			unblocked = append(unblocked, candidate)
 		}
 	}
-	logging.Printf("[Task] Completed %s: %s", task.ID, task.Subject)
+	logger.Info("[Task] Completed %s: %s", task.ID, task.Subject)
 	if len(unblocked) > 0 {
 		subjects := make([]string, len(unblocked))
 		for i := range unblocked {
 			subjects[i] = unblocked[i].Subject
 		}
-		logging.Printf("[Task] Unblocked: %s", strings.Join(subjects, ", "))
+		logger.Info("[Task] Unblocked: %s", strings.Join(subjects, ", "))
 	}
 	return task, unblocked, nil
 }

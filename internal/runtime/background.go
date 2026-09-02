@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"go-agent-harness/internal/logging"
+	"go-agent-harness/internal/logger"
 )
 
 const commandTimeout = 120 * time.Second
@@ -34,7 +34,7 @@ type BackgroundManager struct {
 	closed  bool
 }
 
-// New 创建可跨多次 LLM 调用存活的后台任务管理器。
+// NewBackground 创建可跨多次 LLM 调用存活的后台任务管理器。
 func NewBackground(execute Executor) *BackgroundManager {
 	// 使用独立于单次 Runner.Run 的根 context，使任务能跨 LLM 回合继续执行；
 	// 应用退出时再通过 Close 统一取消。
@@ -75,7 +75,7 @@ func (m *BackgroundManager) Start(command string) (string, error) {
 	m.mu.Unlock()
 
 	// 任务登记完成后再启动 goroutine，确保极快完成的命令也能找到自己的状态。
-	logging.Printf("[Background] started %s: %s", id, preview(command, 60))
+	logger.Info("[Background] started %s: %s", id, preview(command, 60))
 	go m.run(id, command)
 	return id, nil
 }
@@ -134,7 +134,11 @@ func (m *BackgroundManager) Collect() []string {
 			current.id, current.status, escape(current.command), escape(truncate(current.result, 500)),
 		))
 		// 只在结果真正交付给主循环时记录 collected，便于区分“已完成”和“已消费”。
-		logging.Printf("[Background] collected %s: %s", current.id, current.status)
+		if current.status == "failed" {
+			logger.Error("[Background] collected %s: %s", current.id, current.status)
+		} else {
+			logger.Info("[Background] collected %s: %s", current.id, current.status)
+		}
 	}
 	return notifications
 }

@@ -1,16 +1,5 @@
 package hooks
 
-import "fmt"
-
-type Event string
-
-const (
-	EventUserPromptSubmit Event = "UserPromptSubmit"
-	EventPreToolUse       Event = "PreToolUse"
-	EventPostToolUse      Event = "PostToolUse"
-	EventStop             Event = "Stop"
-)
-
 type UserPromptSubmitHook func(query string)
 type PreToolUseHook func(call ToolCall) string
 type PostToolUseHook func(call ToolCall, output string)
@@ -42,36 +31,20 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Register(event Event, callback any) error {
-	switch event {
-	case EventUserPromptSubmit:
-		hook, ok := callback.(func(string))
-		if !ok {
-			return fmt.Errorf("invalid callback for %s", event)
-		}
-		m.userPromptSubmit = append(m.userPromptSubmit, hook)
-	case EventPreToolUse:
-		hook, ok := callback.(func(ToolCall) string)
-		if !ok {
-			return fmt.Errorf("invalid callback for %s", event)
-		}
-		m.preToolUse = append(m.preToolUse, hook)
-	case EventPostToolUse:
-		hook, ok := callback.(func(ToolCall, string))
-		if !ok {
-			return fmt.Errorf("invalid callback for %s", event)
-		}
-		m.postToolUse = append(m.postToolUse, hook)
-	case EventStop:
-		hook, ok := callback.(func(StopContext) string)
-		if !ok {
-			return fmt.Errorf("invalid callback for %s", event)
-		}
-		m.stop = append(m.stop, hook)
-	default:
-		return fmt.Errorf("unknown hook event: %s", event)
-	}
-	return nil
+func (m *Manager) OnUserPrompt(hook UserPromptSubmitHook) {
+	m.userPromptSubmit = append(m.userPromptSubmit, hook)
+}
+
+func (m *Manager) BeforeTool(hook PreToolUseHook) {
+	m.preToolUse = append(m.preToolUse, hook)
+}
+
+func (m *Manager) AfterTool(hook PostToolUseHook) {
+	m.postToolUse = append(m.postToolUse, hook)
+}
+
+func (m *Manager) OnStop(hook StopHook) {
+	m.stop = append(m.stop, hook)
 }
 
 func (m *Manager) TriggerUserPromptSubmit(query string) {

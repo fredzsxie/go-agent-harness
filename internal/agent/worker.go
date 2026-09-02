@@ -1,9 +1,8 @@
-package loop
+package agent
 
 import (
 	"context"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 )
 
@@ -16,17 +15,17 @@ type WorkerTurn struct {
 
 // Worker 统一主 Agent 与 Subagent 的单轮模型和工具调用。
 type Worker struct {
-	model    agent.Model
+	model    Model
 	registry *Registry
 	executor *ToolExecutor
 }
 
-func NewWorker(model agent.Model, registry *Registry, hookManager *hooks.Manager) *Worker {
+func NewWorker(model Model, registry *Registry, hookManager *hooks.Manager) *Worker {
 	return &Worker{model: model, registry: registry, executor: NewToolExecutor(registry, hookManager)}
 }
 
 func (w *Worker) RunTurn(ctx context.Context, system string, messages []Message, intercept ToolInterceptor) (WorkerTurn, error) {
-	response, err := w.model.Complete(ctx, agent.ModelRequest{
+	response, err := w.model.Complete(ctx, ModelRequest{
 		System: system, Messages: messages, Tools: w.registry.Specs(), MaxTokens: 8000,
 	})
 	if err != nil {

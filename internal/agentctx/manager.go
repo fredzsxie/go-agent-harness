@@ -4,10 +4,10 @@ package agentctx
 import (
 	"context"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/compact"
 	"go-agent-harness/internal/memory"
 	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/protocol"
 )
 
 type MemoryReport struct {
@@ -35,7 +35,7 @@ func New(builder *prompt.Builder, legacyPrompt string) *Manager {
 }
 
 // StartRequest 在一次用户请求开始时召回 Memory，并生成本次请求稳定使用的 System Prompt。
-func (m *Manager) StartRequest(ctx context.Context, messages []agent.Message, tools []agent.ToolSpec, selector memory.Selector) (string, error) {
+func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message, toolNames []string, selector memory.Selector) (string, error) {
 	relevant, err := m.memory.LoadRelevant(ctx, messages, selector)
 	if err != nil {
 		return "", err
@@ -47,23 +47,19 @@ func (m *Manager) StartRequest(ctx context.Context, messages []agent.Message, to
 	if m.promptBuilder == nil {
 		return prompt.Build(m.legacyPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
 	}
-	names := make([]string, 0, len(tools))
-	for _, spec := range tools {
-		names = append(names, spec.Name)
-	}
-	return m.promptBuilder.Get(prompt.Context{EnabledTools: names, Memories: section}), nil
+	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: section}), nil
 }
 
-func (m *Manager) Prepare(ctx context.Context, messages []agent.Message, summarize compact.Summarizer) ([]agent.Message, error) {
+func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
 	prepared, _, err := m.compact.Prepare(ctx, messages, summarize)
 	return prepared, err
 }
 
-func (m *Manager) ReactiveCompact(ctx context.Context, messages []agent.Message, summarize compact.Summarizer) ([]agent.Message, error) {
+func (m *Manager) ReactiveCompact(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
 	return m.compact.ReactiveCompact(ctx, messages, summarize)
 }
 
-func (m *Manager) Compact(ctx context.Context, messages []agent.Message, summarize compact.Summarizer) ([]agent.Message, error) {
+func (m *Manager) Compact(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
 	return m.compact.CompactHistory(ctx, messages, summarize)
 }
 
@@ -72,7 +68,7 @@ func (m *Manager) MaxReactiveRetries() int {
 }
 
 // Finalize 在会话正常结束后提取 Memory；只有确实新增内容时才执行合并。
-func (m *Manager) Finalize(ctx context.Context, messages []agent.Message, extract memory.Extractor, consolidate memory.Consolidator) MemoryReport {
+func (m *Manager) Finalize(ctx context.Context, messages []protocol.Message, extract memory.Extractor, consolidate memory.Consolidator) MemoryReport {
 	report := MemoryReport{}
 	report.Extracted, report.ExtractError = m.memory.Extract(ctx, messages, extract)
 	if report.ExtractError != nil || report.Extracted == 0 {

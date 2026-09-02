@@ -1,3 +1,4 @@
+// Package config 加载 Agent 进程所需的环境配置。
 package config
 
 import (

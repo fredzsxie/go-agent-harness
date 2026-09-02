@@ -16,27 +16,27 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s11 Background Tasks**。s01–s11 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s12–s17 暂不实现。
+当前学习进度到 **s12 Cron Scheduler**。s01–s12 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s13–s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
-| s01 | Agent Loop | 已完成 | `loop/runner.go`, `loop/anthropic.go` |
-| s02 | Tool Use | 已完成 | `loop/registry.go`, `tools/` |
+| s01 | Agent Loop | 已完成 | `internal/agent/runner.go`, `internal/model/anthropic.go` |
+| s02 | Tool Use | 已完成 | `internal/agent/registry.go`, `internal/tool/builtin/` |
 | s03 | Permission | 已完成 | `internal/permission/` |
-| s04 | Hooks | 已完成 | `internal/hooks/`, `loop/tooluse.go` |
+| s04 | Hooks | 已完成 | `internal/hooks/`, `internal/agent/tool_executor.go` |
 | s05 | TodoWrite | 已完成 | `internal/todo/` |
 | s06 | Subagent | 已完成 | `internal/subagent/` |
 | s07 | Skill Loading | 已完成 | `internal/skill/`, `internal/prompt/` |
-| s08 | Context Compact | 已完成 | `internal/compact/`, `loop/runner.go` |
-| s09 | Memory | 已完成 | `internal/memory/`, `loop/runner.go` |
+| s08 | Context Compact | 已完成 | `internal/compact/`, `internal/agent/runner.go` |
+| s09 | Memory | 已完成 | `internal/memory/`, `internal/agent/runner.go` |
 | s10 | Task System | 已完成 | `internal/task/`, `.tasks/` |
-| s11 | Background Tasks | 已完成 | `internal/scheduler/`, `loop/runner.go` |
-| s12 | Cron Scheduler | 待学习 | `internal/scheduler/` 目前仅含 s11 逻辑 |
-| s13 | Agent Teams | 待学习 | `internal/team/`, `internal/worktree/` 目前为空包 |
-| s14 | MCP Plugin | 待学习 | 尚未创建 `internal/mcp/` |
-| s15 | Integrated Harness | 待学习 | 等 s10–s14 完成后总装 |
-| s16 | Workflow Runtime | 待学习 | 尚未实现 |
-| s17 | Goal Loop | 待学习 | 尚未实现 |
+| s11 | Background Tasks | 已完成 | `internal/runtime/`, `internal/agent/runner.go` |
+| s12 | Cron Scheduler | 已完成 | `internal/runtime/cron.go`, `internal/app/app.go` |
+| s13 | Agent Teams | 仅占位 | `internal/team/`, `internal/worktree/` |
+| s14 | MCP Plugin | 仅占位 | `internal/mcp/` |
+| s15 | Integrated Harness | 仅预留 | 继续使用 `internal/app/` 作为组合根 |
+| s16 | Workflow Runtime | 仅占位 | `internal/workflow/` |
+| s17 | Goal Loop | 仅占位 | `internal/goal/` |
 
 详细的代码映射、验收边界和后续计划见 [learn-claude-code-go-reference.md](./learn-claude-code-go-reference.md)。
 
@@ -157,7 +157,7 @@ Content block 是由 `type` 区分结构的联合类型。当前项目只处理�
 
 #### 当前项目中的 Message 与 ContentBlock
 
-本项目使用 [internal/conversation/types.go](./internal/conversation/types.go) 中的轻量类型保存消息历史：
+本项目使用 [internal/protocol/message.go](./internal/protocol/message.go) 中的轻量类型保存消息历史：
 
 ```go
 type Message struct {
@@ -200,25 +200,25 @@ type ContentBlock struct {
 
 `Message.Content` 与 `Message.Blocks` 是两种内部表示，不应同时当成两份内容发送：
 
-- `Blocks` 为空时，[ToAnthropicBlocks](./loop/anthropic.go) 把非空 `Content` 转成一个 `text` block。
+- `Blocks` 为空时，[Anthropic 消息适配层](./internal/model/anthropic_message.go) 把非空 `Content` 转成一个 `text` block。
 - `Blocks` 非空时以 `Blocks` 为准，`Content` 不会再次发送。模型响应解析时仍会把所有文本汇总到 `Content`，方便提取最终回答。
-- `ParseAnthropicAssistantMessage` 当前只解析 `text` 和 `tool_use`；其他 Anthropic block 类型尚未进入本地消息历史。
+- Anthropic 响应适配当前只解析 `text` 和 `tool_use`；其他 block 类型尚未进入本地消息历史。
 - 本地字段名是统一存储模型，不是可直接发送的 Anthropic JSON。例如本地 `tool_use.ToolUseID` 必须由适配层转换为 API 的 `id`，`ToolName` 必须转换为 `name`。
 
 上面的工具调用在本项目中可表示为：
 
 ```go
-messages := []loop.Message{
+messages := []agent.Message{
     {
-        Role:    loop.RoleUser,
+        Role:    agent.RoleUser,
         Content: "读取 README.md 的前 20 行",
     },
     {
-        Role: loop.RoleAssistant,
-        Blocks: []loop.ContentBlock{
-            {Type: loop.BlockText, Text: "我先读取文件。"},
+        Role: agent.RoleAssistant,
+        Blocks: []agent.ContentBlock{
+            {Type: agent.BlockText, Text: "我先读取文件。"},
             {
-                Type:      loop.BlockToolUse,
+                Type:      agent.BlockToolUse,
                 ToolUseID: "toolu_01",
                 ToolName:  "read_file",
                 Input:     map[string]any{"path": "README.md", "limit": 20},
@@ -226,10 +226,10 @@ messages := []loop.Message{
         },
     },
     {
-        Role: loop.RoleUser,
-        Blocks: []loop.ContentBlock{
+        Role: agent.RoleUser,
+        Blocks: []agent.ContentBlock{
             {
-                Type:      loop.BlockToolResult,
+                Type:      agent.BlockToolResult,
                 ToolUseID: "toolu_01",
                 Text:      "# go-agent-harness\n...",
                 IsError:   false,
@@ -239,7 +239,7 @@ messages := []loop.Message{
 }
 ```
 
-发送请求前，[ToAnthropicMessages](./loop/anthropic.go) 会把这些内部对象转换成 Anthropic SDK 的 `MessageParam` 和 `ContentBlockParamUnion`；收到响应后，`ParseAnthropicAssistantMessage` 再将 SDK block 转回本地结构。这样主循环、compact、memory 与 subagent 可以共享同一套消息协议，而 API 字段差异集中留在适配层。
+发送请求前，[Anthropic 消息适配层](./internal/model/anthropic_message.go) 会把内部对象转换成 Anthropic SDK 类型；收到响应后再转回本地结构。Agent Loop、Compact、Memory 与 Subagent 因此共享同一套消息协议，API 字段差异只存在于模型适配层。
 
 ### 统一工具池
 
@@ -255,7 +255,7 @@ messages := []loop.Message{
 - `load_skill`
 - `compact`
 
-所有工具通过 `loop.Registry` 注册，Runner 不关心具体工具来源。
+所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。
 
 ### 权限与 Hooks
 
@@ -286,29 +286,42 @@ Subagent 使用独立的 `messages[]` 和受限工具池，不会继续派生子
 
 只有显式设置 `bash.run_in_background=true` 的命令才会异步执行。工具调用会立即返回 `bg_id`，完成结果则在后续 LLM 调用前以独立的 `<task_notification>` 注入；退出应用时会取消仍在运行的后台命令。
 
+### Cron Scheduler
+
+`schedule_cron`、`list_crons` 和 `cancel_cron` 用于管理五段式本地时间计划。支持 `*`、`*/N`、单值、范围和逗号列表；到期任务先进入待投递队列，Agent 空闲后才以 `[Scheduled] prompt` 开始新 turn。同一分钟不会重复入队，周期任务确认投递后等待下次匹配，一次性任务确认后删除。
+
+默认任务为 recurring 且 durable，持久化到 `.scheduled_tasks.json` 并使用临时文件原子替换。重启会恢复任务定义及尚未确认的投递，但不会补跑进程关闭期间错过的时间。定时 turn 不允许弹出交互式权限确认，需要确认的操作会直接拒绝。
+
+s11 与 s12 同放在 `internal/runtime/`，但分别由 `BackgroundManager` 与 `CronScheduler` 管理。前者负责执行和收集后台命令，后者负责未来时间的调度与持久化；二者只共享应用生命周期，不共享状态。
+
+### 日志
+
+运行日志统一使用 `logger.Info` 和 `logger.Error`。格式为本地日期时间、Level 和原日志内容，例如：
+
+```text
+2026/09/02 15:04:05 [INFO] [Background] started bg_0001: go test ./...
+2026/09/02 15:04:06 [ERROR] [cron] delivery failed: context canceled
+```
+
+CLI 提示、Agent 最终回答、Todo 展示和权限确认属于交互输出，不添加日志时间或 Level。
+
+### 注释规范
+
+核心逻辑注释统一使用中文，重点说明协议约束、并发边界、状态迁移和错误恢复原因，不逐行复述实现。Agent、LLM、Session、ContentBlock、tool_use、tool_result、Hook、Cron、Anthropic 等专业术语保留英文。
+
 ## 项目结构
 
 ```text
 go-agent-harness/
-├── main.go
-├── config/
-│   └── config.go
-├── loop/
-│   ├── anthropic.go
-│   ├── message.go
-│   ├── registry.go
-│   ├── runner.go
-│   ├── tooluse.go
-│   └── types.go
-├── tools/
-│   ├── bash.go
-│   ├── read.go
-│   ├── write.go
-│   ├── edit.go
-│   └── glob.go
+├── cmd/agent/main.go
 └── internal/
-    ├── app/          # CLI 装配
-    ├── conversation/ # 共享消息协议
+    ├── config/       # 环境与模型配置
+    ├── app/          # CLI 与依赖装配
+    ├── agent/        # Session、Agent Loop、Registry 与 ToolExecutor
+    ├── protocol/     # Message 与 ContentBlock 协议
+    ├── model/        # Model 接口的 Anthropic 适配
+    ├── agentctx/     # Prompt、Compact 与 Memory 编排
+    ├── tool/builtin/ # Shell 与文件工具
     ├── hooks/        # s04
     ├── permission/   # s03
     ├── todo/         # s05
@@ -317,11 +330,14 @@ go-agent-harness/
     ├── compact/      # s08
     ├── memory/       # s09
     ├── prompt/       # 运行时 prompt 组装
-    ├── retry/        # 预留，尚未实现
     ├── task/         # s10 持久化任务图
-    ├── scheduler/    # s11 后台任务；s12 定时调度待学习
-    ├── team/         # s13 待学习
-    └── worktree/     # s13 待学习
+    ├── runtime/      # s11 Background 与 s12 Cron
+    ├── logger/       # 带时间及 INFO/ERROR Level 的极简日志
+    ├── team/         # s13 仅占位
+    ├── worktree/     # s13 仅占位
+    ├── mcp/          # s14 仅占位
+    ├── workflow/     # s16 仅占位
+    └── goal/         # s17 仅占位
 ```
 
 ## 快速开始
@@ -337,7 +353,7 @@ MODEL_ID=claude-sonnet-4-6
 运行：
 
 ```bash
-go run .
+go run ./cmd/agent
 ```
 
 验证：
@@ -349,4 +365,4 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go vet ./...
 
 ## 下一步
 
-下一课从新版 **s12 Cron Scheduler** 开始。在开始 s12 前，不提前实现 Cron、Agent Teams、MCP、Workflow 或 Goal Loop。
+下一课从新版 **s13 Agent Teams** 开始。s13–s17 当前文件只声明包用途，不注册工具、不启动 goroutine、不访问文件，也不调用 LLM。

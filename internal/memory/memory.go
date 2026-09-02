@@ -1,9 +1,6 @@
-// Package memory implements persistent cross-session memory.
-//
-// Memories are stored as Markdown files under .memory/. Each file has YAML
-// frontmatter and MEMORY.md is rebuilt as a lightweight index that can be kept
-// in the system prompt. Model-backed selection, extraction, and consolidation
-// are injected by callers so this package stays independent from any LLM SDK.
+// Package memory 实现跨 Session 的持久 Memory。
+// 每条 Memory 保存为带 YAML frontmatter 的 Markdown 文件，MEMORY.md 是供 System Prompt 使用的轻量索引。
+// 选择、提取与合并逻辑由调用方注入，因此本包不依赖具体 LLM SDK。
 package memory
 
 import (
@@ -18,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/protocol"
 )
 
 const (
@@ -28,24 +25,24 @@ const (
 	MaxConsolidatedRecords      = 30
 )
 
-type Role = agent.Role
+type Role = protocol.Role
 
 const (
-	RoleUser      = agent.RoleUser
-	RoleAssistant = agent.RoleAssistant
+	RoleUser      = protocol.RoleUser
+	RoleAssistant = protocol.RoleAssistant
 )
 
-type BlockType = agent.BlockType
+type BlockType = protocol.BlockType
 
 const (
-	BlockText       = agent.BlockText
-	BlockToolUse    = agent.BlockToolUse
-	BlockToolResult = agent.BlockToolResult
+	BlockText       = protocol.BlockText
+	BlockToolUse    = protocol.BlockToolUse
+	BlockToolResult = protocol.BlockToolResult
 )
 
-type ContentBlock = agent.ContentBlock
+type ContentBlock = protocol.ContentBlock
 
-type Message = agent.Message
+type Message = protocol.Message
 
 type Type string
 

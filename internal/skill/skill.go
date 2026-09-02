@@ -14,21 +14,7 @@ import (
 	"go-agent-harness/internal/workspace"
 )
 
-// s07: Skill Loading — two-level on-demand knowledge injection.
-//
-//   Layer 1 (cheap, always present):
-//     SYSTEM prompt includes skill names + one-line descriptions (~100 tokens/skill)
-//     "Skills available: agent-builder, code-review, mcp-builder, pdf"
-//
-//   Layer 2 (expensive, on demand):
-//     Agent calls load_skill("code-review") → full SKILL.md content
-//     injected via tool_result (~2000 tokens/skill)
-//
-//   skills/
-//     agent-builder/SKILL.md
-//     code-review/SKILL.md
-//     mcp-builder/SKILL.md
-//     pdf/SKILL.md
+// s07 使用两层按需加载：System Prompt 常驻名称和简述，Agent 调用 load_skill 后才通过 tool_result 注入全文。
 
 const (
 	skillsDirName     = "skills"
