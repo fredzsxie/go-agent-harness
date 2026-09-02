@@ -20,6 +20,7 @@ import (
 
 type Runner struct {
 	client        agent.Model
+	worker        *Worker
 	registry      *Registry
 	hooks         *hooks.Manager
 	compact       *compact.Manager
@@ -45,6 +46,7 @@ func NewRunner(cfg config.LLMConfig, registry *Registry, hookManager *hooks.Mana
 		legacyPrompt: systemPrompt,
 	}
 	runner.background = newBackgroundManager(registry)
+	runner.worker = NewWorker(runner.client, registry, hookManager)
 	return runner
 }
 
@@ -67,6 +69,7 @@ func NewRunnerWithPromptBuilder(cfg config.LLMConfig, registry *Registry, hookMa
 		promptBuilder: builder,
 	}
 	runner.background = newBackgroundManager(registry)
+	runner.worker = NewWorker(runner.client, registry, hookManager)
 	return runner
 }
 
@@ -117,14 +120,13 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		}
 		sessionMessages = prepared
 
-		resp, err := r.client.Complete(ctx, agent.ModelRequest{
-			MaxTokens: 8000,
-			Messages:  sessionMessages,
-			Tools:     r.registry.Specs(),
-			System:    systemPrompt,
-		})
+		turn, err := r.worker.RunTurn(ctx, systemPrompt, sessionMessages, r.interceptTool)
 		fmt.Println("[LLM] Main llm calling done.")
 		if err != nil {
+			// 已产生 assistant 消息说明错误来自工具阶段，不应按模型上下文超限重试。
+			if turn.Assistant.Role != "" {
+				return RunResult{}, err
+			}
 			if isPromptTooLong(err) && reactiveRetries < r.compact.MaxReactiveRetries() {
 				compacted, compactErr := r.compact.ReactiveCompact(ctx, sessionMessages, r.summarizeCompactHistory)
 				if compactErr != nil {
@@ -138,8 +140,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		}
 		reactiveRetries = 0
 
-		assistantMessage := resp.Message
-		hasToolUse := messageHasToolUse(assistantMessage)
+		assistantMessage := turn.Assistant
+		hasToolUse := turn.HasTools
 
 		sessionMessages = append(sessionMessages, assistantMessage)
 
@@ -179,13 +181,10 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		}
 
 		roundsSinceTodo++
-		toolResults, used, compactedMessages, compacted, err := r.executeToolUses(ctx, sessionMessages, assistantMessage.Blocks)
-		if err != nil {
-			return RunResult{}, err
-		}
-		toolCallCnt += used
-		if compacted {
-			sessionMessages = compactedMessages
+		toolResults := turn.Tools.Results
+		toolCallCnt += turn.Tools.Count
+		if turn.Tools.Stop {
+			sessionMessages = turn.Tools.Messages
 			sessionMessages = append(sessionMessages, Message{
 				Role:    RoleUser,
 				Content: compactToolResultText(toolResults),
@@ -219,70 +218,29 @@ func compactToolResultText(results []ContentBlock) string {
 	return results[0].Text
 }
 
-func (r *Runner) executeToolUses(ctx context.Context, sessionMessages []Message, blocks []ContentBlock) ([]ContentBlock, int, []Message, bool, error) {
-	results := make([]ContentBlock, 0, len(blocks))
-	toolCallCnt := 0
-
-	for _, block := range blocks {
-		if block.Type != BlockToolUse {
-			continue
+func (r *Runner) interceptTool(ctx context.Context, sessionMessages []Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
+	if call.Name == "compact" {
+		compacted, err := r.compact.CompactHistory(ctx, sessionMessages, r.summarizeCompactHistory)
+		if err != nil {
+			return ToolOutcome{}, true, err
 		}
-		toolCallCnt++
-
-		if block.ToolName == "compact" {
-			compacted, err := r.compact.CompactHistory(ctx, sessionMessages, r.summarizeCompactHistory)
-			if err != nil {
-				return nil, toolCallCnt, nil, false, err
-			}
-			results = append(results, ContentBlock{
-				Type:      BlockToolResult,
-				ToolUseID: block.ToolUseID,
-				Text:      "[Compacted. Conversation history has been summarized.]",
-			})
-			return results, toolCallCnt, compacted, true, nil
-		}
-
-		call := hooks.ToolCall{
-			ID:    block.ToolUseID,
-			Name:  block.ToolName,
-			Input: block.Input,
-		}
-
-		result := ""
-		isError := false
-		if blocked := r.hooks.TriggerPreToolUse(call); blocked != "" {
-			result = blocked
-			isError = true
-		} else if scheduler.ShouldRunBackground(call.Name, call.Input) {
-			// PreToolUse 已通过后才异步启动，并立即用占位结果结束本次 tool_use。
-			command, _ := call.Input["command"].(string)
-			id, err := r.background.Start(command)
-			if err != nil {
-				result = "Error: " + err.Error()
-				isError = true
-			} else {
-				result = fmt.Sprintf("[Background task %s started] The result will be collected on a later turn.", id)
-			}
-			r.hooks.TriggerPostToolUse(call, result)
-		} else {
-			output, err := r.registry.Dispatch(ctx, call.Name, call.Input)
-			if err != nil {
-				output = err.Error()
-				isError = true
-			}
-			result = output
-			r.hooks.TriggerPostToolUse(call, result)
-		}
-
-		results = append(results, ContentBlock{
-			Type:      BlockToolResult,
-			ToolUseID: call.ID,
-			Text:      result,
-			IsError:   isError,
-		})
+		return ToolOutcome{
+			Text:     "[Compacted. Conversation history has been summarized.]",
+			Stop:     true,
+			Messages: compacted,
+		}, true, nil
 	}
 
-	return results, toolCallCnt, nil, false, nil
+	if scheduler.ShouldRunBackground(call.Name, call.Input) {
+		// PreToolUse 已通过后才异步启动，并立即用占位结果结束本次 tool_use。
+		command, _ := call.Input["command"].(string)
+		id, err := r.background.Start(command)
+		if err != nil {
+			return ToolOutcome{Text: "Error: " + err.Error(), IsError: true}, true, nil
+		}
+		return ToolOutcome{Text: fmt.Sprintf("[Background task %s started] The result will be collected on a later turn.", id)}, true, nil
+	}
+	return ToolOutcome{}, false, nil
 }
 
 func injectBackgroundResults(messages []Message, notifications []string) []Message {

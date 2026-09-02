@@ -1,5 +1,4 @@
-// Package loop 中的 tooluse 执行器统一封装 tool_use 的执行流程，
-// 包括 hook 触发、registry 调度和 tool_result 回填。
+// Package loop 中的 ToolExecutor 统一封装 tool_use 的执行流程。
 package loop
 
 import (
@@ -8,17 +7,44 @@ import (
 	"go-agent-harness/internal/hooks"
 )
 
-type ToolObserver func(call hooks.ToolCall, result string, isError bool)
+// ToolOutcome 表示拦截器生成的工具结果及其对会话历史的影响。
+type ToolOutcome struct {
+	Text     string
+	IsError  bool
+	Stop     bool
+	Messages []Message
+}
 
-func ExecuteToolUses(ctx context.Context, blocks []ContentBlock, registry *Registry, hookManager *hooks.Manager, observer ToolObserver) ([]ContentBlock, int) {
-	results := make([]ContentBlock, 0, len(blocks))
-	toolCallCnt := 0
+// ToolInterceptor 在 Registry 分发前处理需要运行时状态的特殊工具。
+type ToolInterceptor func(ctx context.Context, messages []Message, call hooks.ToolCall) (ToolOutcome, bool, error)
+
+type ToolBatch struct {
+	Results  []ContentBlock
+	Count    int
+	Stop     bool
+	Messages []Message
+}
+
+type ToolExecutor struct {
+	registry *Registry
+	hooks    *hooks.Manager
+}
+
+func NewToolExecutor(registry *Registry, hookManager *hooks.Manager) *ToolExecutor {
+	if hookManager == nil {
+		hookManager = hooks.NewManager()
+	}
+	return &ToolExecutor{registry: registry, hooks: hookManager}
+}
+
+func (e *ToolExecutor) Execute(ctx context.Context, messages []Message, blocks []ContentBlock, intercept ToolInterceptor) (ToolBatch, error) {
+	batch := ToolBatch{Results: make([]ContentBlock, 0, len(blocks))}
 
 	for _, block := range blocks {
 		if block.Type != BlockToolUse {
 			continue
 		}
-		toolCallCnt++
+		batch.Count++
 
 		call := hooks.ToolCall{
 			ID:    block.ToolUseID,
@@ -26,31 +52,42 @@ func ExecuteToolUses(ctx context.Context, blocks []ContentBlock, registry *Regis
 			Input: block.Input,
 		}
 
-		result := ""
-		isError := false
-		if blocked := hookManager.TriggerPreToolUse(call); blocked != "" {
-			result = blocked
-			isError = true
+		outcome := ToolOutcome{}
+		if blocked := e.hooks.TriggerPreToolUse(call); blocked != "" {
+			outcome.Text = blocked
+			outcome.IsError = true
 		} else {
-			output, err := registry.Dispatch(ctx, call.Name, call.Input)
-			if err != nil {
-				output = err.Error()
-				isError = true
+			handled := false
+			if intercept != nil {
+				var err error
+				outcome, handled, err = intercept(ctx, messages, call)
+				if err != nil {
+					return ToolBatch{}, err
+				}
 			}
-			result = output
-			hookManager.TriggerPostToolUse(call, result)
-			if observer != nil {
-				observer(call, result, isError)
+			if !handled {
+				output, err := e.registry.Dispatch(ctx, call.Name, call.Input)
+				outcome.Text = output
+				if err != nil {
+					outcome.Text = err.Error()
+					outcome.IsError = true
+				}
 			}
+			e.hooks.TriggerPostToolUse(call, outcome.Text)
 		}
 
-		results = append(results, ContentBlock{
+		batch.Results = append(batch.Results, ContentBlock{
 			Type:      BlockToolResult,
 			ToolUseID: call.ID,
-			Text:      result,
-			IsError:   isError,
+			Text:      outcome.Text,
+			IsError:   outcome.IsError,
 		})
+		if outcome.Stop {
+			batch.Stop = true
+			batch.Messages = outcome.Messages
+			return batch, nil
+		}
 	}
 
-	return results, toolCallCnt
+	return batch, nil
 }

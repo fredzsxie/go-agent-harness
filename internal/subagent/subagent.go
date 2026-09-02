@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"go-agent-harness/config"
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
@@ -17,22 +16,15 @@ import (
 const maxTurns = 30
 
 type Manager struct {
-	client   agent.Model
-	registry *loop.Registry
-	hooks    *hooks.Manager
-	out      io.Writer
+	worker *loop.Worker
+	out    io.Writer
 }
 
 func New(cfg config.LLMConfig, registry *loop.Registry, hookManager *hooks.Manager, out io.Writer) *Manager {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
-	return &Manager{
-		client:   llmmodel.NewAnthropic(cfg),
-		registry: registry,
-		hooks:    hookManager,
-		out:      out,
-	}
+	return &Manager{worker: loop.NewWorker(llmmodel.NewAnthropic(cfg), registry, hookManager), out: out}
 }
 
 func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
@@ -57,27 +49,20 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 	finished := false
 
 	for range maxTurns {
-		resp, err := m.client.Complete(ctx, agent.ModelRequest{
-			MaxTokens: 8000,
-			Messages:  messages,
-			Tools:     m.registry.Specs(),
-			System:    prompt.Subagent(),
-		})
+		turn, err := m.worker.RunTurn(ctx, prompt.Subagent(), messages, nil)
 		if err != nil {
 			return "", err
 		}
 
-		assistantMessage := resp.Message
+		assistantMessage := turn.Assistant
 		messages = append(messages, assistantMessage)
 
-		if !hasToolUse(assistantMessage) {
+		if !turn.HasTools {
 			finished = true
 			break
 		}
 
-		toolResults, _ := loop.ExecuteToolUses(ctx, assistantMessage.Blocks, m.registry, m.hooks, func(call hooks.ToolCall, result string, _ bool) {
-			// m.logf("  [sub] %s: %s\n", call.Name, preview(result, 100))
-		})
+		toolResults := turn.Tools.Results
 		if len(toolResults) == 0 {
 			return "", fmt.Errorf("subagent requested tool_use without tool blocks")
 		}
@@ -99,23 +84,6 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 
 	m.logf("[Subagent done]\n\n")
 	return strings.TrimSpace(result), nil
-}
-
-func hasToolUse(message loop.Message) bool {
-	for _, block := range message.Blocks {
-		if block.Type == loop.BlockToolUse {
-			return true
-		}
-	}
-	return false
-}
-
-func preview(text string, max int) string {
-	text = strings.TrimSpace(text)
-	if len(text) <= max {
-		return text
-	}
-	return text[:max] + "..."
 }
 
 func (m *Manager) logf(format string, args ...any) {

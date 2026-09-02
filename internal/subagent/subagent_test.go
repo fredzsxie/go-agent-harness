@@ -21,10 +21,3 @@ func TestLatestAssistantTextFallsBackToMostRecentAssistantMessage(t *testing.T) 
 		t.Fatalf("expected final assistant summary, got %q", result)
 	}
 }
-
-func TestPreviewTruncatesLongText(t *testing.T) {
-	result := preview("abcdefghijklmnopqrstuvwxyz", 10)
-	if result != "abcdefghij..." {
-		t.Fatalf("unexpected preview: %q", result)
-	}
-}
