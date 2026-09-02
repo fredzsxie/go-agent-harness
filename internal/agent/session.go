@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"go-agent-harness/internal/protocol"
 )
 
 type sessionRunner interface {
-	Run(context.Context, []Message) (RunResult, error)
+	Run(context.Context, []protocol.Message) (RunResult, error)
 	Close()
 }
 
@@ -15,7 +17,7 @@ type sessionRunner interface {
 type Session struct {
 	mu       sync.Mutex
 	runner   sessionRunner
-	messages []Message
+	messages []protocol.Message
 }
 
 func NewSession(runner *Runner) *Session {
@@ -23,18 +25,18 @@ func NewSession(runner *Runner) *Session {
 }
 
 func newSession(runner sessionRunner) *Session {
-	return &Session{runner: runner, messages: make([]Message, 0, 16)}
+	return &Session{runner: runner, messages: make([]protocol.Message, 0, 16)}
 }
 
 // Submit 等待当前 Agent Loop 结束，然后提交一批同源输入。
-func (s *Session) Submit(ctx context.Context, inputs ...Message) (RunResult, error) {
+func (s *Session) Submit(ctx context.Context, inputs ...protocol.Message) (RunResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.run(ctx, inputs)
 }
 
 // TrySubmit 供 Cron 非阻塞投递；false 表示 Session 当前仍在处理其他输入。
-func (s *Session) TrySubmit(ctx context.Context, before, after func(), inputs ...Message) (RunResult, bool, error) {
+func (s *Session) TrySubmit(ctx context.Context, before, after func(), inputs ...protocol.Message) (RunResult, bool, error) {
 	if !s.mu.TryLock() {
 		return RunResult{}, false, nil
 	}
@@ -49,7 +51,7 @@ func (s *Session) TrySubmit(ctx context.Context, before, after func(), inputs ..
 	return result, true, err
 }
 
-func (s *Session) run(ctx context.Context, inputs []Message) (RunResult, error) {
+func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult, error) {
 	if s.runner == nil {
 		return RunResult{}, errors.New("session runner is not configured")
 	}

@@ -4,16 +4,17 @@ import (
 	"testing"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/protocol"
 )
 
 func TestLatestAssistantTextFallsBackToMostRecentAssistantMessage(t *testing.T) {
-	messages := []agent.Message{
-		{Role: agent.RoleUser, Content: "delegate this"},
-		{Role: agent.RoleAssistant, Content: "first answer"},
-		{Role: agent.RoleUser, Blocks: []agent.ContentBlock{
-			{Type: agent.BlockToolResult, ToolUseID: "x", Text: "tool output"},
+	messages := []protocol.Message{
+		{Role: protocol.RoleUser, Content: "delegate this"},
+		{Role: protocol.RoleAssistant, Content: "first answer"},
+		{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{
+			{Type: protocol.BlockToolResult, ToolUseID: "x", Text: "tool output"},
 		}},
-		{Role: agent.RoleAssistant, Content: "final summary"},
+		{Role: protocol.RoleAssistant, Content: "final summary"},
 	}
 
 	result := agent.LatestAssistantText(messages)

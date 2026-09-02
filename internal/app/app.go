@@ -18,6 +18,7 @@ import (
 	"go-agent-harness/internal/logger"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/protocol"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
@@ -169,7 +170,7 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 		return false, nil
 	}
 
-	result, err := a.session.Submit(ctx, agent.Message{Role: agent.RoleUser, Content: userInput})
+	result, err := a.session.Submit(ctx, protocol.Message{Role: protocol.RoleUser, Content: userInput})
 	if err != nil {
 		return false, err
 	}
@@ -227,9 +228,9 @@ func (a *App) runScheduledTurn(ctx context.Context) {
 	if len(jobs) == 0 {
 		return
 	}
-	inputs := make([]agent.Message, 0, len(jobs))
+	inputs := make([]protocol.Message, 0, len(jobs))
 	for _, job := range jobs {
-		inputs = append(inputs, agent.Message{Role: agent.RoleUser, Content: "[Scheduled] " + job.Prompt})
+		inputs = append(inputs, protocol.Message{Role: protocol.RoleUser, Content: "[Scheduled] " + job.Prompt})
 		logger.Info("[cron] delivered %s: %s", job.ID, previewText(job.Prompt, 60))
 	}
 

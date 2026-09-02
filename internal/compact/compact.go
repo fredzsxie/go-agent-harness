@@ -28,26 +28,7 @@ const (
 	DefaultMaxReactiveRetries    = 1
 )
 
-type Role = protocol.Role
-
-const (
-	RoleUser      = protocol.RoleUser
-	RoleAssistant = protocol.RoleAssistant
-)
-
-type BlockType = protocol.BlockType
-
-const (
-	BlockText       = protocol.BlockText
-	BlockToolUse    = protocol.BlockToolUse
-	BlockToolResult = protocol.BlockToolResult
-)
-
-type ContentBlock = protocol.ContentBlock
-
-type Message = protocol.Message
-
-type Summarizer func(ctx context.Context, messages []Message) (string, error)
+type Summarizer func(ctx context.Context, messages []protocol.Message) (string, error)
 
 type Config struct {
 	WorkDir               string
@@ -104,7 +85,7 @@ func (m *Manager) MaxReactiveRetries() int {
 	return m.cfg.MaxReactiveRetries
 }
 
-func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, bool, error) {
+func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, summarize Summarizer) ([]protocol.Message, bool, error) {
 	logger.Info("[Prepare] L3 compact")
 	prepared, err := m.ToolResultBudget(messages)
 	if err != nil {
@@ -135,7 +116,7 @@ func (m *Manager) Prepare(ctx context.Context, messages []Message, summarize Sum
 	return compacted, true, nil
 }
 
-func EstimateSize(messages []Message) int {
+func EstimateSize(messages []protocol.Message) int {
 	raw, err := json.Marshal(messages)
 	if err != nil {
 		return len(fmt.Sprint(messages))
@@ -144,7 +125,7 @@ func EstimateSize(messages []Message) int {
 }
 
 // L1: snip_compact 裁切无关旧会话
-func (m *Manager) SnipCompact(messages []Message) []Message {
+func (m *Manager) SnipCompact(messages []protocol.Message) []protocol.Message {
 	if len(messages) <= m.cfg.MaxMessages {
 		return messages
 	}
@@ -178,10 +159,10 @@ func (m *Manager) SnipCompact(messages []Message) []Message {
 
 	// 拼接压缩后的对话
 	snipped := tailStart - headEnd
-	out := make([]Message, 0, headEnd+1+len(messages)-tailStart)
+	out := make([]protocol.Message, 0, headEnd+1+len(messages)-tailStart)
 	out = append(out, messages[:headEnd]...)
-	out = append(out, Message{
-		Role:    RoleUser,
+	out = append(out, protocol.Message{
+		Role:    protocol.RoleUser,
 		Content: fmt.Sprintf("[snipped %d messages from conversation middle]", snipped),
 	})
 	out = append(out, messages[tailStart:]...)
@@ -190,11 +171,11 @@ func (m *Manager) SnipCompact(messages []Message) []Message {
 }
 
 // L2: micro_compact 旧工具调用结果替换为占位符
-func (m *Manager) MicroCompact(messages []Message) []Message {
+func (m *Manager) MicroCompact(messages []protocol.Message) []protocol.Message {
 	positions := collectToolResults(messages)
 	lastAssistant := -1
 	for i, message := range messages {
-		if message.Role == RoleAssistant {
+		if message.Role == protocol.RoleAssistant {
 			lastAssistant = i
 		}
 	}
@@ -228,7 +209,7 @@ func (m *Manager) MicroCompact(messages []Message) []Message {
 }
 
 // L3: tool_resutl_budget 大结果落盘
-func (m *Manager) ToolResultBudget(messages []Message) ([]Message, error) {
+func (m *Manager) ToolResultBudget(messages []protocol.Message) ([]protocol.Message, error) {
 	if len(messages) == 0 {
 		return messages, nil
 	}
@@ -239,7 +220,7 @@ func (m *Manager) ToolResultBudget(messages []Message) ([]Message, error) {
 	}
 	lastAssistant := -1
 	for i, message := range messages {
-		if message.Role == RoleAssistant {
+		if message.Role == protocol.RoleAssistant {
 			lastAssistant = i
 		}
 	}
@@ -287,12 +268,12 @@ func (m *Manager) ToolResultBudget(messages []Message) ([]Message, error) {
 }
 
 // L4: compact_history - 调用LLM生成全量摘要
-func (m *Manager) CompactHistory(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, error) {
+func (m *Manager) CompactHistory(ctx context.Context, messages []protocol.Message, summarize Summarizer) ([]protocol.Message, error) {
 	return m.compactWithPrefix(ctx, messages, summarize, "[Compacted]")
 }
 
 // 应急兜底 reactive_compact (api返回413 / prompt too long -> 字节级裁剪)
-func (m *Manager) ReactiveCompact(ctx context.Context, messages []Message, summarize Summarizer) ([]Message, error) {
+func (m *Manager) ReactiveCompact(ctx context.Context, messages []protocol.Message, summarize Summarizer) ([]protocol.Message, error) {
 	if _, err := m.WriteTranscript(messages); err != nil {
 		return nil, err
 	}
@@ -309,14 +290,14 @@ func (m *Manager) ReactiveCompact(ctx context.Context, messages []Message, summa
 		tailStart--
 	}
 
-	out := make([]Message, 0, 1+len(messages)-tailStart)
-	out = append(out, Message{Role: RoleUser, Content: "[Reactive compact]\n\n" + summary})
+	out := make([]protocol.Message, 0, 1+len(messages)-tailStart)
+	out = append(out, protocol.Message{Role: protocol.RoleUser, Content: "[Reactive compact]\n\n" + summary})
 	out = append(out, messages[tailStart:]...)
 
 	return out, nil
 }
 
-func (m *Manager) WriteTranscript(messages []Message) (string, error) {
+func (m *Manager) WriteTranscript(messages []protocol.Message) (string, error) {
 	if err := os.MkdirAll(m.cfg.TranscriptDir, 0o755); err != nil {
 		return "", err
 	}
@@ -336,7 +317,7 @@ func (m *Manager) WriteTranscript(messages []Message) (string, error) {
 	return path, nil
 }
 
-func (m *Manager) compactWithPrefix(ctx context.Context, messages []Message, summarize Summarizer, prefix string) ([]Message, error) {
+func (m *Manager) compactWithPrefix(ctx context.Context, messages []protocol.Message, summarize Summarizer, prefix string) ([]protocol.Message, error) {
 	if _, err := m.WriteTranscript(messages); err != nil {
 		return nil, err
 	}
@@ -345,10 +326,10 @@ func (m *Manager) compactWithPrefix(ctx context.Context, messages []Message, sum
 		return nil, err
 	}
 
-	return []Message{{Role: RoleUser, Content: prefix + "\n\n" + summary}}, nil
+	return []protocol.Message{{Role: protocol.RoleUser, Content: prefix + "\n\n" + summary}}, nil
 }
 
-func summarizeHistory(ctx context.Context, messages []Message, summarize Summarizer) (string, error) {
+func summarizeHistory(ctx context.Context, messages []protocol.Message, summarize Summarizer) (string, error) {
 	if summarize == nil {
 		return "", fmt.Errorf("compact summarizer is nil")
 	}
@@ -421,14 +402,14 @@ type toolResultPosition struct {
 	blockIndex   int
 }
 
-func collectToolResults(messages []Message) []toolResultPosition {
+func collectToolResults(messages []protocol.Message) []toolResultPosition {
 	positions := make([]toolResultPosition, 0)
 	for mi, message := range messages {
-		if message.Role != RoleUser {
+		if message.Role != protocol.RoleUser {
 			continue
 		}
 		for bi, block := range message.Blocks {
-			if block.Type == BlockToolResult {
+			if block.Type == protocol.BlockToolResult {
 				positions = append(positions, toolResultPosition{messageIndex: mi, blockIndex: bi})
 			}
 		}
@@ -436,39 +417,39 @@ func collectToolResults(messages []Message) []toolResultPosition {
 	return positions
 }
 
-func messageHasToolUse(message Message) bool {
-	if message.Role != RoleAssistant {
+func messageHasToolUse(message protocol.Message) bool {
+	if message.Role != protocol.RoleAssistant {
 		return false
 	}
 	for _, block := range message.Blocks {
-		if block.Type == BlockToolUse {
+		if block.Type == protocol.BlockToolUse {
 			return true
 		}
 	}
 	return false
 }
 
-func isToolResultMessage(message Message) bool {
-	if message.Role != RoleUser {
+func isToolResultMessage(message protocol.Message) bool {
+	if message.Role != protocol.RoleUser {
 		return false
 	}
 	for _, block := range message.Blocks {
-		if block.Type == BlockToolResult {
+		if block.Type == protocol.BlockToolResult {
 			return true
 		}
 	}
 	return false
 }
 
-func cloneMessages(messages []Message) []Message {
-	out := make([]Message, 0, len(messages))
+func cloneMessages(messages []protocol.Message) []protocol.Message {
+	out := make([]protocol.Message, 0, len(messages))
 	for _, message := range messages {
-		copyMessage := Message{
+		copyMessage := protocol.Message{
 			Role:    message.Role,
 			Content: message.Content,
 		}
 		if len(message.Blocks) > 0 {
-			copyMessage.Blocks = make([]ContentBlock, 0, len(message.Blocks))
+			copyMessage.Blocks = make([]protocol.ContentBlock, 0, len(message.Blocks))
 			for _, block := range message.Blocks {
 				copyBlock := block
 				if block.Input != nil {

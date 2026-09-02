@@ -7,18 +7,18 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/protocol"
 )
 
 func TestToAnthropicMessagesPreservesToolProtocol(t *testing.T) {
-	messages := []agent.Message{
-		{Role: agent.RoleUser, Content: "读取文件"},
-		{Role: agent.RoleAssistant, Blocks: []agent.ContentBlock{{
-			Type: agent.BlockToolUse, ToolUseID: "toolu_01", ToolName: "read_file",
+	messages := []protocol.Message{
+		{Role: protocol.RoleUser, Content: "读取文件"},
+		{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
+			Type: protocol.BlockToolUse, ToolUseID: "toolu_01", ToolName: "read_file",
 			Input: map[string]any{"path": "README.md"},
 		}}},
-		{Role: agent.RoleUser, Blocks: []agent.ContentBlock{{
-			Type: agent.BlockToolResult, ToolUseID: "toolu_01", Text: "content",
+		{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{{
+			Type: protocol.BlockToolResult, ToolUseID: "toolu_01", Text: "content",
 		}}},
 	}
 
@@ -44,14 +44,14 @@ func TestParseAssistantMessageBuildsInternalBlocks(t *testing.T) {
 	}
 
 	message := parseAssistantMessage(content)
-	if message.Role != agent.RoleAssistant || message.Content != "我先读取文件。" {
+	if message.Role != protocol.RoleAssistant || message.Content != "我先读取文件。" {
 		t.Fatalf("unexpected message: %#v", message)
 	}
 	if len(message.Blocks) != 2 {
 		t.Fatalf("expected 2 blocks, got %d", len(message.Blocks))
 	}
 	toolUse := message.Blocks[1]
-	if toolUse.Type != agent.BlockToolUse || toolUse.ToolUseID != "toolu_01" || toolUse.ToolName != "read_file" {
+	if toolUse.Type != protocol.BlockToolUse || toolUse.ToolUseID != "toolu_01" || toolUse.ToolName != "read_file" {
 		t.Fatalf("unexpected tool_use block: %#v", toolUse)
 	}
 	if toolUse.Input["path"] != "README.md" {

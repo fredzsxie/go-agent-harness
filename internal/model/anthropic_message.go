@@ -8,6 +8,7 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/protocol"
 )
 
 func toAnthropicTools(specs []agent.ToolSpec) []anthropic.ToolUnionParam {
@@ -25,7 +26,7 @@ func toAnthropicTools(specs []agent.ToolSpec) []anthropic.ToolUnionParam {
 	return params
 }
 
-func toAnthropicMessages(messages []agent.Message) []anthropic.MessageParam {
+func toAnthropicMessages(messages []protocol.Message) []anthropic.MessageParam {
 	params := make([]anthropic.MessageParam, 0, len(messages))
 	for _, message := range messages {
 		blocks := toAnthropicBlocks(message)
@@ -33,16 +34,16 @@ func toAnthropicMessages(messages []agent.Message) []anthropic.MessageParam {
 			continue
 		}
 		switch message.Role {
-		case agent.RoleUser:
+		case protocol.RoleUser:
 			params = append(params, anthropic.MessageParam{Role: anthropic.MessageParamRoleUser, Content: blocks})
-		case agent.RoleAssistant:
+		case protocol.RoleAssistant:
 			params = append(params, anthropic.MessageParam{Role: anthropic.MessageParamRoleAssistant, Content: blocks})
 		}
 	}
 	return params
 }
 
-func toAnthropicBlocks(message agent.Message) []anthropic.ContentBlockParamUnion {
+func toAnthropicBlocks(message protocol.Message) []anthropic.ContentBlockParamUnion {
 	if len(message.Blocks) == 0 {
 		if strings.TrimSpace(message.Content) == "" {
 			return nil
@@ -53,22 +54,22 @@ func toAnthropicBlocks(message agent.Message) []anthropic.ContentBlockParamUnion
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(message.Blocks))
 	for _, block := range message.Blocks {
 		switch block.Type {
-		case agent.BlockText:
+		case protocol.BlockText:
 			blocks = append(blocks, anthropic.NewTextBlock(block.Text))
-		case agent.BlockToolUse:
+		case protocol.BlockToolUse:
 			blocks = append(blocks, anthropic.NewToolUseBlock(block.ToolUseID, block.Input, block.ToolName))
-		case agent.BlockToolResult:
+		case protocol.BlockToolResult:
 			blocks = append(blocks, anthropic.NewToolResultBlock(block.ToolUseID, block.Text, block.IsError))
 		}
 	}
 	return blocks
 }
 
-func parseAssistantMessage(content []anthropic.ContentBlockUnion) agent.Message {
-	message := agent.Message{Role: agent.RoleAssistant, Blocks: make([]agent.ContentBlock, 0, len(content))}
+func parseAssistantMessage(content []anthropic.ContentBlockUnion) protocol.Message {
+	message := protocol.Message{Role: protocol.RoleAssistant, Blocks: make([]protocol.ContentBlock, 0, len(content))}
 	for _, block := range content {
 		if text := block.AsText(); text.Text != "" {
-			message.Blocks = append(message.Blocks, agent.ContentBlock{Type: agent.BlockText, Text: text.Text})
+			message.Blocks = append(message.Blocks, protocol.ContentBlock{Type: protocol.BlockText, Text: text.Text})
 			if message.Content != "" {
 				message.Content += "\n"
 			}
@@ -77,8 +78,8 @@ func parseAssistantMessage(content []anthropic.ContentBlockUnion) agent.Message 
 		}
 
 		if toolUse := block.AsToolUse(); toolUse.Name != "" {
-			message.Blocks = append(message.Blocks, agent.ContentBlock{
-				Type:      agent.BlockToolUse,
+			message.Blocks = append(message.Blocks, protocol.ContentBlock{
+				Type:      protocol.BlockToolUse,
 				ToolUseID: toolUse.ID,
 				ToolName:  toolUse.Name,
 				Input:     cloneMap(normalizeToolInput(toolUse.Input)),

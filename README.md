@@ -208,17 +208,17 @@ type ContentBlock struct {
 上面的工具调用在本项目中可表示为：
 
 ```go
-messages := []agent.Message{
+messages := []protocol.Message{
     {
-        Role:    agent.RoleUser,
+        Role:    protocol.RoleUser,
         Content: "读取 README.md 的前 20 行",
     },
     {
-        Role: agent.RoleAssistant,
-        Blocks: []agent.ContentBlock{
-            {Type: agent.BlockText, Text: "我先读取文件。"},
+        Role: protocol.RoleAssistant,
+        Blocks: []protocol.ContentBlock{
+            {Type: protocol.BlockText, Text: "我先读取文件。"},
             {
-                Type:      agent.BlockToolUse,
+                Type:      protocol.BlockToolUse,
                 ToolUseID: "toolu_01",
                 ToolName:  "read_file",
                 Input:     map[string]any{"path": "README.md", "limit": 20},
@@ -226,10 +226,10 @@ messages := []agent.Message{
         },
     },
     {
-        Role: agent.RoleUser,
-        Blocks: []agent.ContentBlock{
+        Role: protocol.RoleUser,
+        Blocks: []protocol.ContentBlock{
             {
-                Type:      agent.BlockToolResult,
+                Type:      protocol.BlockToolResult,
                 ToolUseID: "toolu_01",
                 Text:      "# go-agent-harness\n...",
                 IsError:   false,

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go-agent-harness/internal/protocol"
 )
 
 func TestWriteRebuildIndexAndList(t *testing.T) {
@@ -54,8 +56,8 @@ func TestLoadRelevantFallsBackToKeywordSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := manager.LoadRelevant(context.Background(), []Message{
-		{Role: RoleUser, Content: "Create a file and use tabs for indentation."},
+	loaded, err := manager.LoadRelevant(context.Background(), []protocol.Message{
+		{Role: protocol.RoleUser, Content: "Create a file and use tabs for indentation."},
 	}, func(context.Context, string, []CatalogItem, int) ([]int, error) {
 		return nil, os.ErrInvalid
 	})
@@ -75,8 +77,8 @@ func TestLoadRelevantHonorsSuccessfulEmptyModelSelection(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := manager.LoadRelevant(context.Background(), []Message{
-		{Role: RoleUser, Content: "Use tabs."},
+	loaded, err := manager.LoadRelevant(context.Background(), []protocol.Message{
+		{Role: protocol.RoleUser, Content: "Use tabs."},
 	}, func(context.Context, string, []CatalogItem, int) ([]int, error) {
 		return []int{}, nil
 	})
@@ -122,8 +124,8 @@ func TestLoadRelevantLimitsTotalRecalledContent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	loaded, err := manager.LoadRelevant(context.Background(), []Message{
-		{Role: RoleUser, Content: "alpha beta"},
+	loaded, err := manager.LoadRelevant(context.Background(), []protocol.Message{
+		{Role: protocol.RoleUser, Content: "alpha beta"},
 	}, func(context.Context, string, []CatalogItem, int) ([]int, error) {
 		return []int{0, 1}, nil
 	})
@@ -165,8 +167,8 @@ func TestKeywordSelectionRanksByMatchCountThenFilename(t *testing.T) {
 
 func TestExtractWritesNewMemories(t *testing.T) {
 	manager := New(Config{WorkDir: t.TempDir()})
-	count, err := manager.Extract(context.Background(), []Message{
-		{Role: RoleUser, Content: "Remember that I prefer single quotes."},
+	count, err := manager.Extract(context.Background(), []protocol.Message{
+		{Role: protocol.RoleUser, Content: "Remember that I prefer single quotes."},
 	}, func(_ context.Context, dialogue string, existing []CatalogItem) ([]Record, error) {
 		if !strings.Contains(dialogue, "single quotes") {
 			t.Fatalf("dialogue was not formatted: %q", dialogue)
@@ -199,7 +201,7 @@ func TestExtractStoresOnlyNewPersistentMemories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count, err := manager.Extract(context.Background(), []Message{{Role: RoleUser, Content: "Remember my preferences."}}, func(context.Context, string, []CatalogItem) ([]Record, error) {
+	count, err := manager.Extract(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "Remember my preferences."}}, func(context.Context, string, []CatalogItem) ([]Record, error) {
 		return []Record{
 			{Name: "temporary", Type: TypeProject, Scope: ScopeCurrentTask, Description: "Current task path", Body: "Use /tmp only for this task."},
 			{Name: "duplicate", Type: TypeUser, Scope: ScopePersistent, Description: "User prefers tabs", Body: "Different wording."},

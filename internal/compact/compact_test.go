@@ -5,18 +5,20 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"go-agent-harness/internal/protocol"
 )
 
 func TestSnipCompactPreservesToolUseResultPairAtTail(t *testing.T) {
 	manager := New(Config{MaxMessages: 6})
-	messages := []Message{
-		{Role: RoleUser, Content: "start"},
-		{Role: RoleUser, Content: "one"},
-		{Role: RoleUser, Content: "two"},
-		{Role: RoleUser, Content: "three"},
-		{Role: RoleAssistant, Blocks: []ContentBlock{{Type: BlockToolUse, ToolUseID: "tool-1", ToolName: "read_file"}}},
-		{Role: RoleUser, Blocks: []ContentBlock{{Type: BlockToolResult, ToolUseID: "tool-1", Text: "result"}}},
-		{Role: RoleAssistant, Content: "done"},
+	messages := []protocol.Message{
+		{Role: protocol.RoleUser, Content: "start"},
+		{Role: protocol.RoleUser, Content: "one"},
+		{Role: protocol.RoleUser, Content: "two"},
+		{Role: protocol.RoleUser, Content: "three"},
+		{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolUse, ToolUseID: "tool-1", ToolName: "read_file"}}},
+		{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolResult, ToolUseID: "tool-1", Text: "result"}}},
+		{Role: protocol.RoleAssistant, Content: "done"},
 	}
 
 	compacted := manager.SnipCompact(messages)
@@ -24,7 +26,7 @@ func TestSnipCompactPreservesToolUseResultPairAtTail(t *testing.T) {
 	if len(compacted) != 7 {
 		t.Fatalf("expected tail tool pair to be preserved with placeholder, got %d messages", len(compacted))
 	}
-	if compacted[3].Role != RoleUser || !strings.Contains(compacted[3].Content, "snipped") {
+	if compacted[3].Role != protocol.RoleUser || !strings.Contains(compacted[3].Content, "snipped") {
 		t.Fatalf("expected snip placeholder at index 3, got %#v", compacted[3])
 	}
 	if !messageHasToolUse(compacted[4]) || !isToolResultMessage(compacted[5]) {
@@ -34,7 +36,7 @@ func TestSnipCompactPreservesToolUseResultPairAtTail(t *testing.T) {
 
 func TestMicroCompactKeepsRecentToolResults(t *testing.T) {
 	manager := New(Config{WorkDir: t.TempDir(), KeepRecentToolResults: 2})
-	messages := []Message{
+	messages := []protocol.Message{
 		toolResultMessage("a", strings.Repeat("a", 130)),
 		toolResultMessage("b", strings.Repeat("b", 130)),
 		toolResultMessage("c", strings.Repeat("c", 130)),
@@ -52,7 +54,7 @@ func TestMicroCompactKeepsRecentToolResults(t *testing.T) {
 
 func TestPreparePreservesToolResultsBelowContextLimit(t *testing.T) {
 	manager := New(Config{WorkDir: t.TempDir(), ContextLimit: 10000, KeepRecentToolResults: 1})
-	messages := []Message{
+	messages := []protocol.Message{
 		toolResultMessage("a", strings.Repeat("a", 130)),
 		toolResultMessage("b", strings.Repeat("b", 130)),
 		toolResultMessage("c", strings.Repeat("c", 130)),
@@ -68,19 +70,19 @@ func TestPreparePreservesToolResultsBelowContextLimit(t *testing.T) {
 
 func TestMicroCompactPreservesWholeUnseenToolResultBatch(t *testing.T) {
 	manager := New(Config{WorkDir: t.TempDir(), KeepRecentToolResults: 1})
-	messages := []Message{
-		{Role: RoleAssistant, Blocks: []ContentBlock{{Type: BlockToolUse, ToolUseID: "old", ToolName: "bash"}}},
+	messages := []protocol.Message{
+		{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolUse, ToolUseID: "old", ToolName: "bash"}}},
 		toolResultMessage("old", strings.Repeat("o", 130)),
-		{Role: RoleAssistant, Content: "observed"},
-		{Role: RoleAssistant, Blocks: []ContentBlock{
-			{Type: BlockToolUse, ToolUseID: "new-1", ToolName: "bash"},
-			{Type: BlockToolUse, ToolUseID: "new-2", ToolName: "bash"},
+		{Role: protocol.RoleAssistant, Content: "observed"},
+		{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{
+			{Type: protocol.BlockToolUse, ToolUseID: "new-1", ToolName: "bash"},
+			{Type: protocol.BlockToolUse, ToolUseID: "new-2", ToolName: "bash"},
 		}},
-		{Role: RoleUser, Blocks: []ContentBlock{
-			{Type: BlockToolResult, ToolUseID: "new-1", Text: strings.Repeat("1", 130)},
-			{Type: BlockToolResult, ToolUseID: "new-2", Text: strings.Repeat("2", 130)},
+		{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{
+			{Type: protocol.BlockToolResult, ToolUseID: "new-1", Text: strings.Repeat("1", 130)},
+			{Type: protocol.BlockToolResult, ToolUseID: "new-2", Text: strings.Repeat("2", 130)},
 		}},
-		{Role: RoleUser, Content: "<reminder>Update your todos.</reminder>"},
+		{Role: protocol.RoleUser, Content: "<reminder>Update your todos.</reminder>"},
 	}
 
 	compacted := manager.MicroCompact(messages)
@@ -97,9 +99,9 @@ func TestToolResultBudgetPersistsLargeOutput(t *testing.T) {
 		PersistThreshold: 10,
 		PreviewBytes:     5,
 	})
-	messages := []Message{
-		{Role: RoleUser, Blocks: []ContentBlock{{
-			Type:      BlockToolResult,
+	messages := []protocol.Message{
+		{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{{
+			Type:      protocol.BlockToolResult,
 			ToolUseID: "tool-1",
 			Text:      "0123456789abcdefghijklmnopqrstuvwxyz",
 		}}},
@@ -122,10 +124,10 @@ func TestToolResultBudgetPersistsLargeOutput(t *testing.T) {
 func TestToolResultBudgetFindsUnseenResultBeforeTrailingNotice(t *testing.T) {
 	dir := t.TempDir()
 	manager := New(Config{WorkDir: dir, PersistThreshold: 10, ToolResultBudget: 1000, PreviewBytes: 5})
-	messages := []Message{
-		{Role: RoleAssistant, Blocks: []ContentBlock{{Type: BlockToolUse, ToolUseID: "tool-1", ToolName: "read_file"}}},
+	messages := []protocol.Message{
+		{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolUse, ToolUseID: "tool-1", ToolName: "read_file"}}},
 		toolResultMessage("tool-1", "0123456789abcdefghijklmnopqrstuvwxyz"),
-		{Role: RoleUser, Content: "<reminder>Update your todos.</reminder>"},
+		{Role: protocol.RoleUser, Content: "<reminder>Update your todos.</reminder>"},
 	}
 
 	prepared, err := manager.ToolResultBudget(messages)
@@ -139,9 +141,9 @@ func TestToolResultBudgetFindsUnseenResultBeforeTrailingNotice(t *testing.T) {
 
 func TestPrepareAutoCompactsWhenOverLimit(t *testing.T) {
 	manager := New(Config{WorkDir: t.TempDir(), ContextLimit: 20})
-	messages := []Message{{Role: RoleUser, Content: strings.Repeat("x", 100)}}
+	messages := []protocol.Message{{Role: protocol.RoleUser, Content: strings.Repeat("x", 100)}}
 
-	compacted, didCompact, err := manager.Prepare(context.Background(), messages, func(context.Context, []Message) (string, error) {
+	compacted, didCompact, err := manager.Prepare(context.Background(), messages, func(context.Context, []protocol.Message) (string, error) {
 		return "summary", nil
 	})
 	if err != nil {
@@ -155,6 +157,6 @@ func TestPrepareAutoCompactsWhenOverLimit(t *testing.T) {
 	}
 }
 
-func toolResultMessage(id string, text string) Message {
-	return Message{Role: RoleUser, Blocks: []ContentBlock{{Type: BlockToolResult, ToolUseID: id, Text: text}}}
+func toolResultMessage(id string, text string) protocol.Message {
+	return protocol.Message{Role: protocol.RoleUser, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolResult, ToolUseID: id, Text: text}}}
 }

@@ -4,11 +4,12 @@ import (
 	"context"
 
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/protocol"
 )
 
 // WorkerTurn 是一次 LLM 调用及其紧随的工具执行结果。
 type WorkerTurn struct {
-	Assistant Message
+	Assistant protocol.Message
 	Tools     ToolBatch
 	HasTools  bool
 }
@@ -24,7 +25,7 @@ func NewWorker(model Model, registry *Registry, hookManager *hooks.Manager) *Wor
 	return &Worker{model: model, registry: registry, executor: NewToolExecutor(registry, hookManager)}
 }
 
-func (w *Worker) RunTurn(ctx context.Context, system string, messages []Message, intercept ToolInterceptor) (WorkerTurn, error) {
+func (w *Worker) RunTurn(ctx context.Context, system string, messages []protocol.Message, intercept ToolInterceptor) (WorkerTurn, error) {
 	response, err := w.model.Complete(ctx, ModelRequest{
 		System: system, Messages: messages, Tools: w.registry.Specs(), MaxTokens: 8000,
 	})

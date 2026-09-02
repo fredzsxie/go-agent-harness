@@ -9,6 +9,7 @@ import (
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/protocol"
 )
 
 const maxTurns = 30
@@ -42,7 +43,7 @@ func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
 func (m *Manager) spawn(ctx context.Context, description string) (string, error) {
 	logger.Info("[Subagent] spawned")
 
-	messages := []agent.Message{{Role: agent.RoleUser, Content: description}}
+	messages := []protocol.Message{{Role: protocol.RoleUser, Content: description}}
 	finished := false
 
 	for range maxTurns {
@@ -64,8 +65,8 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 			return "", fmt.Errorf("subagent requested tool_use without tool blocks")
 		}
 
-		messages = append(messages, agent.Message{
-			Role:   agent.RoleUser,
+		messages = append(messages, protocol.Message{
+			Role:   protocol.RoleUser,
 			Blocks: toolResults,
 		})
 	}

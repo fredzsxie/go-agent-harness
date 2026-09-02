@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/protocol"
 )
 
 type fakeModel struct {
-	response Message
+	response protocol.Message
 	requests []ModelRequest
 }
 
@@ -18,15 +19,15 @@ func (m *fakeModel) Complete(_ context.Context, request ModelRequest) (ModelResp
 }
 
 func TestWorkerRunsModelAndToolsThroughOnePath(t *testing.T) {
-	model := &fakeModel{response: Message{Role: RoleAssistant, Blocks: []ContentBlock{{
-		Type: BlockToolUse, ToolUseID: "toolu_01", ToolName: "echo", Input: map[string]any{"text": "hello"},
+	model := &fakeModel{response: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
+		Type: protocol.BlockToolUse, ToolUseID: "toolu_01", ToolName: "echo", Input: map[string]any{"text": "hello"},
 	}}}}
 	registry := NewRegistry()
 	registry.Register(ToolSpec{Name: "echo"}, func(_ context.Context, input any) (string, error) {
 		return input.(map[string]any)["text"].(string), nil
 	})
 
-	turn, err := NewWorker(model, registry, nil).RunTurn(context.Background(), "system", []Message{{Role: RoleUser, Content: "go"}}, nil)
+	turn, err := NewWorker(model, registry, nil).RunTurn(context.Background(), "system", []protocol.Message{{Role: protocol.RoleUser, Content: "go"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,13 +45,13 @@ func TestWorkerRunsModelAndToolsThroughOnePath(t *testing.T) {
 func TestToolInterceptorCanReplaceHistoryAndStopBatch(t *testing.T) {
 	registry := NewRegistry()
 	executor := NewToolExecutor(registry, hooks.NewManager())
-	blocks := []ContentBlock{
-		{Type: BlockToolUse, ToolUseID: "compact_01", ToolName: "compact"},
-		{Type: BlockToolUse, ToolUseID: "later_01", ToolName: "later"},
+	blocks := []protocol.ContentBlock{
+		{Type: protocol.BlockToolUse, ToolUseID: "compact_01", ToolName: "compact"},
+		{Type: protocol.BlockToolUse, ToolUseID: "later_01", ToolName: "later"},
 	}
-	replacement := []Message{{Role: RoleUser, Content: "summary"}}
+	replacement := []protocol.Message{{Role: protocol.RoleUser, Content: "summary"}}
 
-	batch, err := executor.Execute(context.Background(), nil, blocks, func(_ context.Context, _ []Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
+	batch, err := executor.Execute(context.Background(), nil, blocks, func(_ context.Context, _ []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
 		if call.Name != "compact" {
 			t.Fatalf("unexpected call after stop: %s", call.Name)
 		}

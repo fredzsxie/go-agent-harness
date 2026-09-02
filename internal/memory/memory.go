@@ -25,25 +25,6 @@ const (
 	MaxConsolidatedRecords      = 30
 )
 
-type Role = protocol.Role
-
-const (
-	RoleUser      = protocol.RoleUser
-	RoleAssistant = protocol.RoleAssistant
-)
-
-type BlockType = protocol.BlockType
-
-const (
-	BlockText       = protocol.BlockText
-	BlockToolUse    = protocol.BlockToolUse
-	BlockToolResult = protocol.BlockToolResult
-)
-
-type ContentBlock = protocol.ContentBlock
-
-type Message = protocol.Message
-
 type Type string
 
 const (
@@ -227,7 +208,7 @@ func (m *Manager) RebuildIndex() error {
 }
 
 // 根据最近对话内容，调用LLM获取与对话可能相关的memory内容
-func (m *Manager) LoadRelevant(ctx context.Context, messages []Message, selectRelevant Selector) (string, error) {
+func (m *Manager) LoadRelevant(ctx context.Context, messages []protocol.Message, selectRelevant Selector) (string, error) {
 	records, err := m.List()
 	if err != nil {
 		return "", err
@@ -288,7 +269,7 @@ func (m *Manager) LoadRelevant(ctx context.Context, messages []Message, selectRe
 }
 
 // 抽取最近 12 条记录（不超过 8000 个字符），调用 LLM 判断是否有需要提取为 memory 的内容。
-func (m *Manager) Extract(ctx context.Context, messages []Message, extract Extractor) (int, error) {
+func (m *Manager) Extract(ctx context.Context, messages []protocol.Message, extract Extractor) (int, error) {
 	dialogue := FormatRecentMessages(messages, 12, 8000)
 	if strings.TrimSpace(dialogue) == "" {
 		return 0, nil
@@ -416,13 +397,13 @@ func (m *Manager) restoreSnapshot(snapshot map[string][]byte) error {
 	return m.RebuildIndex()
 }
 
-func RecentUserText(messages []Message, maxItems int, maxChars int) string {
+func RecentUserText(messages []protocol.Message, maxItems int, maxChars int) string {
 	if maxItems <= 0 {
 		maxItems = 3
 	}
 	var parts []string
 	for i := len(messages) - 1; i >= 0 && len(parts) < maxItems; i-- {
-		if messages[i].Role != RoleUser {
+		if messages[i].Role != protocol.RoleUser {
 			continue
 		}
 		text := messageText(messages[i])
@@ -438,7 +419,7 @@ func RecentUserText(messages []Message, maxItems int, maxChars int) string {
 	return out
 }
 
-func FormatRecentMessages(messages []Message, maxItems int, maxChars int) string {
+func FormatRecentMessages(messages []protocol.Message, maxItems int, maxChars int) string {
 	if maxItems <= 0 || maxItems > len(messages) {
 		maxItems = len(messages)
 	}
@@ -688,18 +669,18 @@ func keywordSet(text string) map[string]bool {
 	return out
 }
 
-func messageText(message Message) string {
+func messageText(message protocol.Message) string {
 	if strings.TrimSpace(message.Content) != "" {
 		return message.Content
 	}
 	parts := make([]string, 0, len(message.Blocks))
 	for _, block := range message.Blocks {
 		switch block.Type {
-		case BlockText, BlockToolResult:
+		case protocol.BlockText, protocol.BlockToolResult:
 			if strings.TrimSpace(block.Text) != "" {
 				parts = append(parts, block.Text)
 			}
-		case BlockToolUse:
+		case protocol.BlockToolUse:
 			if block.ToolName != "" {
 				parts = append(parts, "[tool_use "+block.ToolName+"]")
 			}

@@ -3,23 +3,25 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"go-agent-harness/internal/protocol"
 )
 
 func TestMessageHasToolUseInspectsBlocks(t *testing.T) {
-	message := Message{Role: RoleAssistant, Blocks: []ContentBlock{
-		{Type: BlockText, Text: "working"},
-		{Type: BlockToolUse, ToolUseID: "tool-1", ToolName: "bash"},
+	message := protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{
+		{Type: protocol.BlockText, Text: "working"},
+		{Type: protocol.BlockToolUse, ToolUseID: "tool-1", ToolName: "bash"},
 	}}
 	if !messageHasToolUse(message) {
 		t.Fatal("expected actual tool_use block to drive loop continuation")
 	}
-	if messageHasToolUse(Message{Role: RoleAssistant, Blocks: []ContentBlock{{Type: BlockText}}}) {
+	if messageHasToolUse(protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{Type: protocol.BlockText}}}) {
 		t.Fatal("empty/text-only response must not create a tool_result turn")
 	}
 }
 
 func TestInjectBackgroundResultsPreservesUserContent(t *testing.T) {
-	messages := []Message{{Role: RoleUser, Content: "next request"}}
+	messages := []protocol.Message{{Role: protocol.RoleUser, Content: "next request"}}
 	messages = injectBackgroundResults(messages, []string{"<task_notification>done</task_notification>"})
 	if len(messages) != 1 || messages[0].Content != "" || len(messages[0].Blocks) != 2 {
 		t.Fatalf("unexpected injected messages: %#v", messages)
@@ -30,9 +32,9 @@ func TestInjectBackgroundResultsPreservesUserContent(t *testing.T) {
 }
 
 func TestInjectBackgroundResultsAddsStandaloneUserEvent(t *testing.T) {
-	messages := []Message{{Role: RoleAssistant, Content: "waiting"}}
+	messages := []protocol.Message{{Role: protocol.RoleAssistant, Content: "waiting"}}
 	messages = injectBackgroundResults(messages, []string{"completed"})
-	if len(messages) != 2 || messages[1].Role != RoleUser || len(messages[1].Blocks) != 1 || messages[1].Blocks[0].Text != "completed" {
+	if len(messages) != 2 || messages[1].Role != protocol.RoleUser || len(messages[1].Blocks) != 1 || messages[1].Blocks[0].Text != "completed" {
 		t.Fatalf("unexpected injected messages: %#v", messages)
 	}
 }

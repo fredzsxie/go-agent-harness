@@ -6,17 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"go-agent-harness/internal/protocol"
 )
 
-func CloneMessages(messages []Message) []Message {
-	cloned := make([]Message, 0, len(messages))
+func CloneMessages(messages []protocol.Message) []protocol.Message {
+	cloned := make([]protocol.Message, 0, len(messages))
 	for _, message := range messages {
-		copyMessage := Message{
+		copyMessage := protocol.Message{
 			Role:    message.Role,
 			Content: message.Content,
 		}
 		if len(message.Blocks) > 0 {
-			copyMessage.Blocks = make([]ContentBlock, 0, len(message.Blocks))
+			copyMessage.Blocks = make([]protocol.ContentBlock, 0, len(message.Blocks))
 			for _, block := range message.Blocks {
 				copyBlock := block
 				if block.Input != nil {
@@ -57,16 +59,16 @@ func NormalizeToolInput(input any) map[string]any {
 	return map[string]any{"command": fmt.Sprint(input)}
 }
 
-func LatestUserPrompt(messages []Message) string {
+func LatestUserPrompt(messages []protocol.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != RoleUser {
+		if messages[i].Role != protocol.RoleUser {
 			continue
 		}
 		if strings.TrimSpace(messages[i].Content) != "" {
 			return messages[i].Content
 		}
 		for _, block := range messages[i].Blocks {
-			if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
+			if block.Type == protocol.BlockText && strings.TrimSpace(block.Text) != "" {
 				return block.Text
 			}
 		}
@@ -74,9 +76,9 @@ func LatestUserPrompt(messages []Message) string {
 	return ""
 }
 
-func LatestAssistantText(messages []Message) string {
+func LatestAssistantText(messages []protocol.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != RoleAssistant {
+		if messages[i].Role != protocol.RoleAssistant {
 			continue
 		}
 		if strings.TrimSpace(messages[i].Content) != "" {

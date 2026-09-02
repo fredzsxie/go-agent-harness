@@ -1,6 +1,10 @@
 package agent
 
-import "context"
+import (
+	"context"
+
+	"go-agent-harness/internal/protocol"
+)
 
 // ToolSpec 描述可提供给 LLM 的工具及其输入 schema。
 type ToolSpec struct {
@@ -13,18 +17,18 @@ type ToolSpec struct {
 // ModelRequest 是 Agent 发给模型的供应商无关请求。
 type ModelRequest struct {
 	System    string
-	Messages  []Message
+	Messages  []protocol.Message
 	Tools     []ToolSpec
 	MaxTokens int64
 }
 
 // ModelResponse 只保留 Agent Loop 推进消息所需的响应内容。
 type ModelResponse struct {
-	Message Message
+	Message protocol.Message
 }
 
 type RunResult struct {
-	Messages []Message
+	Messages []protocol.Message
 	Output   string
 }
 

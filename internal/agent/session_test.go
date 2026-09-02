@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"go-agent-harness/internal/protocol"
 )
 
 type fakeSessionRunner struct {
@@ -11,7 +13,7 @@ type fakeSessionRunner struct {
 	err    error
 }
 
-func (r *fakeSessionRunner) Run(_ context.Context, messages []Message) (RunResult, error) {
+func (r *fakeSessionRunner) Run(_ context.Context, messages []protocol.Message) (RunResult, error) {
 	if r.err != nil {
 		return RunResult{}, r.err
 	}
@@ -24,15 +26,15 @@ func (*fakeSessionRunner) Close() {}
 func TestSessionCommitsMessagesOnlyAfterSuccessfulRun(t *testing.T) {
 	runner := &fakeSessionRunner{}
 	session := newSession(runner)
-	if _, err := session.Submit(context.Background(), Message{Role: RoleUser, Content: "first"}); err != nil {
+	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	runner.err = errors.New("failed")
-	if _, err := session.Submit(context.Background(), Message{Role: RoleUser, Content: "discarded"}); err == nil {
+	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "discarded"}); err == nil {
 		t.Fatal("expected run error")
 	}
 	runner.err = nil
-	result, err := session.Submit(context.Background(), Message{Role: RoleUser, Content: "second"})
+	result, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "second"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"go-agent-harness/internal/agentctx"
-	"go-agent-harness/internal/compact"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/memory"
 	"go-agent-harness/internal/prompt"
+	"go-agent-harness/internal/protocol"
 	agentruntime "go-agent-harness/internal/runtime"
 )
 
@@ -77,7 +77,7 @@ func (r *Runner) Close() {
 	}
 }
 
-func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error) {
+func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	sessionMessages := CloneMessages(messages)
 
 	if userPrompt := LatestUserPrompt(sessionMessages); userPrompt != "" {
@@ -135,8 +135,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		// 没有真实工具块时不能追加空的 user/tool_result 回合。
 		if !hasToolUse {
 			if force := r.hooks.TriggerStop(hooks.StopContext{ToolCallCnt: toolCallCnt}); force != "" {
-				sessionMessages = append(sessionMessages, Message{
-					Role:    RoleUser,
+				sessionMessages = append(sessionMessages, protocol.Message{
+					Role:    protocol.RoleUser,
 					Content: force,
 				})
 				continue
@@ -171,8 +171,8 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		toolCallCnt += turn.Tools.Count
 		if turn.Tools.Stop {
 			sessionMessages = turn.Tools.Messages
-			sessionMessages = append(sessionMessages, Message{
-				Role:    RoleUser,
+			sessionMessages = append(sessionMessages, protocol.Message{
+				Role:    protocol.RoleUser,
 				Content: compactToolResultText(toolResults),
 			})
 			continue
@@ -183,15 +183,15 @@ func (r *Runner) Run(ctx context.Context, messages []Message) (RunResult, error)
 		if messageUsesTool(assistantMessage, "todo_write") {
 			roundsSinceTodo = 0
 		} else if roundsSinceTodo >= 3 {
-			toolResults = append(toolResults, ContentBlock{
-				Type: BlockText,
+			toolResults = append(toolResults, protocol.ContentBlock{
+				Type: protocol.BlockText,
 				Text: prompt.TodoReminder(),
 			})
 			roundsSinceTodo = 0
 		}
 
-		sessionMessages = append(sessionMessages, Message{
-			Role:   RoleUser,
+		sessionMessages = append(sessionMessages, protocol.Message{
+			Role:   protocol.RoleUser,
 			Blocks: toolResults,
 		})
 	}
@@ -205,14 +205,14 @@ func enabledToolNames(specs []ToolSpec) []string {
 	return names
 }
 
-func compactToolResultText(results []ContentBlock) string {
+func compactToolResultText(results []protocol.ContentBlock) string {
 	if len(results) == 0 || strings.TrimSpace(results[0].Text) == "" {
 		return "[Compacted. Conversation history has been summarized.]"
 	}
 	return results[0].Text
 }
 
-func (r *Runner) interceptTool(ctx context.Context, sessionMessages []Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
+func (r *Runner) interceptTool(ctx context.Context, sessionMessages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
 	if call.Name == "compact" {
 		compacted, err := r.context.Compact(ctx, sessionMessages, r.summarizeCompactHistory)
 		if err != nil {
@@ -237,23 +237,23 @@ func (r *Runner) interceptTool(ctx context.Context, sessionMessages []Message, c
 	return ToolOutcome{}, false, nil
 }
 
-func injectBackgroundResults(messages []Message, notifications []string) []Message {
+func injectBackgroundResults(messages []protocol.Message, notifications []string) []protocol.Message {
 	if len(notifications) == 0 {
 		return messages
 	}
-	blocks := make([]ContentBlock, 0, len(notifications)+1)
+	blocks := make([]protocol.ContentBlock, 0, len(notifications)+1)
 	for _, notification := range notifications {
-		blocks = append(blocks, ContentBlock{Type: BlockText, Text: notification})
+		blocks = append(blocks, protocol.ContentBlock{Type: protocol.BlockText, Text: notification})
 	}
-	if len(messages) == 0 || messages[len(messages)-1].Role != RoleUser {
+	if len(messages) == 0 || messages[len(messages)-1].Role != protocol.RoleUser {
 		// Anthropic 消息要求角色交替；assistant 结尾时新增一个 user 通知回合。
-		return append(messages, Message{Role: RoleUser, Blocks: blocks})
+		return append(messages, protocol.Message{Role: protocol.RoleUser, Blocks: blocks})
 	}
 
 	last := &messages[len(messages)-1]
 	// user 结尾时合并到原回合，并保留已有文本或 tool_result 的先后顺序。
 	if strings.TrimSpace(last.Content) != "" {
-		last.Blocks = append([]ContentBlock{{Type: BlockText, Text: last.Content}}, last.Blocks...)
+		last.Blocks = append([]protocol.ContentBlock{{Type: protocol.BlockText, Text: last.Content}}, last.Blocks...)
 		// 原先message[-1].Content的内容放到 message[-1].Blocks[0]中
 		last.Content = ""
 	}
@@ -261,18 +261,18 @@ func injectBackgroundResults(messages []Message, notifications []string) []Messa
 	return messages
 }
 
-func messageHasToolUse(message Message) bool {
+func messageHasToolUse(message protocol.Message) bool {
 	for _, block := range message.Blocks {
-		if block.Type == BlockToolUse {
+		if block.Type == protocol.BlockToolUse {
 			return true
 		}
 	}
 	return false
 }
 
-func messageUsesTool(message Message, name string) bool {
+func messageUsesTool(message protocol.Message, name string) bool {
 	for _, block := range message.Blocks {
-		if block.Type == BlockToolUse && block.ToolName == name {
+		if block.Type == protocol.BlockToolUse && block.ToolName == name {
 			return true
 		}
 	}
@@ -280,7 +280,7 @@ func messageUsesTool(message Message, name string) bool {
 }
 
 // summarizeCompactHistory 调用 LLM 生成可继续工作的历史摘要。
-func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []compact.Message) (string, error) {
+func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []protocol.Message) (string, error) {
 	raw, err := compactPromptPayload(messages)
 	if err != nil {
 		return "", err
@@ -295,7 +295,7 @@ func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []compact
 
 	resp, err := r.client.Complete(ctx, ModelRequest{
 		MaxTokens: 2000,
-		Messages:  []Message{{Role: RoleUser, Content: promptText}},
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: promptText}},
 	})
 	if err != nil {
 		return "", err
@@ -303,7 +303,7 @@ func (r *Runner) summarizeCompactHistory(ctx context.Context, messages []compact
 
 	var parts []string
 	for _, block := range resp.Message.Blocks {
-		if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
+		if block.Type == protocol.BlockText && strings.TrimSpace(block.Text) != "" {
 			parts = append(parts, block.Text)
 		}
 	}
@@ -328,7 +328,7 @@ func (r *Runner) selectRelevantMemories(ctx context.Context, recent string, cata
 
 	resp, err := r.client.Complete(ctx, ModelRequest{
 		MaxTokens: 200,
-		Messages:  []Message{{Role: RoleUser, Content: promptText}},
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: promptText}},
 	})
 	if err != nil {
 		return nil, err
@@ -371,7 +371,7 @@ func (r *Runner) extractMemories(ctx context.Context, dialogue string, existing 
 
 	resp, err := r.client.Complete(ctx, ModelRequest{
 		MaxTokens: 1000,
-		Messages:  []Message{{Role: RoleUser, Content: promptText}},
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: promptText}},
 	})
 	if err != nil {
 		return nil, err
@@ -399,7 +399,7 @@ func (r *Runner) consolidateMemories(ctx context.Context, records []memory.Recor
 
 	resp, err := r.client.Complete(ctx, ModelRequest{
 		MaxTokens: 3000,
-		Messages:  []Message{{Role: RoleUser, Content: promptText}},
+		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: promptText}},
 	})
 	if err != nil {
 		return nil, err
@@ -413,7 +413,7 @@ func (r *Runner) consolidateMemories(ctx context.Context, records []memory.Recor
 	return next, nil
 }
 
-func compactPromptPayload(messages []compact.Message) (string, error) {
+func compactPromptPayload(messages []protocol.Message) (string, error) {
 	raw, err := json.Marshal(messages)
 	if err != nil {
 		return "", err
@@ -421,10 +421,10 @@ func compactPromptPayload(messages []compact.Message) (string, error) {
 	return string(raw), nil
 }
 
-func responseText(message Message) string {
+func responseText(message protocol.Message) string {
 	var parts []string
 	for _, block := range message.Blocks {
-		if block.Type == BlockText && strings.TrimSpace(block.Text) != "" {
+		if block.Type == protocol.BlockText && strings.TrimSpace(block.Text) != "" {
 			parts = append(parts, block.Text)
 		}
 	}

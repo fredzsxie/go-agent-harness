@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/protocol"
 )
 
 // ToolOutcome 表示工具调用结果及其对会话历史的影响。
@@ -12,17 +13,17 @@ type ToolOutcome struct {
 	Text     string
 	IsError  bool
 	Stop     bool
-	Messages []Message
+	Messages []protocol.Message
 }
 
 // ToolInterceptor 在 Registry 分发前处理需要运行时状态的特殊工具。
-type ToolInterceptor func(ctx context.Context, messages []Message, call hooks.ToolCall) (ToolOutcome, bool, error)
+type ToolInterceptor func(ctx context.Context, messages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error)
 
 type ToolBatch struct {
-	Results  []ContentBlock
+	Results  []protocol.ContentBlock
 	Count    int
 	Stop     bool
-	Messages []Message
+	Messages []protocol.Message
 }
 
 type ToolExecutor struct {
@@ -37,11 +38,11 @@ func NewToolExecutor(registry *Registry, hookManager *hooks.Manager) *ToolExecut
 	return &ToolExecutor{registry: registry, hooks: hookManager}
 }
 
-func (e *ToolExecutor) Execute(ctx context.Context, messages []Message, blocks []ContentBlock, intercept ToolInterceptor) (ToolBatch, error) {
-	batch := ToolBatch{Results: make([]ContentBlock, 0, len(blocks))}
+func (e *ToolExecutor) Execute(ctx context.Context, messages []protocol.Message, blocks []protocol.ContentBlock, intercept ToolInterceptor) (ToolBatch, error) {
+	batch := ToolBatch{Results: make([]protocol.ContentBlock, 0, len(blocks))}
 
 	for _, block := range blocks {
-		if block.Type != BlockToolUse {
+		if block.Type != protocol.BlockToolUse {
 			continue
 		}
 		batch.Count++
@@ -76,8 +77,8 @@ func (e *ToolExecutor) Execute(ctx context.Context, messages []Message, blocks [
 			e.hooks.TriggerPostToolUse(call, outcome.Text)
 		}
 
-		batch.Results = append(batch.Results, ContentBlock{
-			Type:      BlockToolResult,
+		batch.Results = append(batch.Results, protocol.ContentBlock{
+			Type:      protocol.BlockToolResult,
 			ToolUseID: call.ID,
 			Text:      outcome.Text,
 			IsError:   outcome.IsError,
