@@ -16,6 +16,7 @@ type MessageType string
 const (
 	MessageText                 MessageType = "message"
 	MessageResult               MessageType = "result"
+	MessageError                MessageType = "error"
 	MessageIdleNotification     MessageType = "idle_notification"
 	MessageShutdownRequest      MessageType = "shutdown_request"
 	MessageShutdownResponse     MessageType = "shutdown_response"
@@ -47,7 +48,7 @@ func validAgentName(name string) bool {
 
 func validMessageType(messageType MessageType) bool {
 	switch messageType {
-	case MessageText, MessageResult, MessageIdleNotification,
+	case MessageText, MessageResult, MessageError, MessageIdleNotification,
 		MessageShutdownRequest, MessageShutdownResponse,
 		MessagePlanRequest, MessagePlanApprovalRequest, MessagePlanApprovalResponse:
 		return true

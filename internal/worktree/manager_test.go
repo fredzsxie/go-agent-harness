@@ -77,6 +77,23 @@ func TestResolveWithoutBindingUsesMainWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveWithoutBindingDoesNotRequireGit(t *testing.T) {
+	root := t.TempDir()
+	tasks := task.New(task.Config{WorkDir: root})
+	created, err := tasks.Create("Non-Git workspace", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := New(Config{WorkDir: root, Tasks: tasks}).Resolve(context.Background(), created)
+	if err != nil {
+		t.Fatalf("unbound task should use a non-Git workspace: %v", err)
+	}
+	expected, err := filepath.EvalSymlinks(root)
+	if err != nil || resolved.Root() != expected {
+		t.Fatalf("unexpected workspace root: %s, %v", resolved.Root(), err)
+	}
+}
+
 func TestBrokenBindingFailsClosed(t *testing.T) {
 	root := gitRepository(t)
 	tasks := task.New(task.Config{WorkDir: root})

@@ -124,11 +124,21 @@ func (m *Manager) Create(ctx context.Context, name, taskID string) (string, erro
 
 // Resolve 返回 Task 实际执行目录；已绑定但损坏的 Worktree 会直接报错，禁止退回主仓库。
 func (m *Manager) Resolve(ctx context.Context, item task.Task) (*workspace.Resolver, error) {
-	if err := m.ready(ctx); err != nil {
-		return nil, err
+	if m == nil {
+		return nil, errors.New("worktree manager is nil")
 	}
+	if m.initErr != nil {
+		return nil, m.initErr
+	}
+	if m.tasks == nil {
+		return nil, errors.New("task manager is required")
+	}
+	// 未绑定的 Task 直接使用主工作区，不要求项目本身一定是 Git 仓库。
 	if item.Worktree == nil {
 		return m.root, nil
+	}
+	if err := m.ready(ctx); err != nil {
+		return nil, err
 	}
 	path, branch, err := m.location(ctx, *item.Worktree)
 	if err != nil {

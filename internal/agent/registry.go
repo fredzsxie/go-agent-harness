@@ -49,3 +49,30 @@ func (r *Registry) Dispatch(ctx context.Context, name string, input any) (string
 	args := NormalizeToolInput(input)
 	return entry.handler(ctx, args)
 }
+
+// Select 复制指定工具，供 Teammate 等受限 Runtime 组装最小工具集。
+func (r *Registry) Select(names ...string) (*Registry, error) {
+	selected := NewRegistry()
+	for _, name := range names {
+		entry, ok := r.entries[name]
+		if !ok {
+			return nil, fmt.Errorf("tool is not registered: %s", name)
+		}
+		selected.Register(entry.spec, entry.handler)
+	}
+	return selected, nil
+}
+
+// Rebind 保留工具 schema，仅替换与当前 Runtime 绑定的 Handler。
+func (r *Registry) Rebind(name string, handler Handler) error {
+	entry, ok := r.entries[name]
+	if !ok {
+		return fmt.Errorf("tool is not registered: %s", name)
+	}
+	if handler == nil {
+		return fmt.Errorf("tool handler is required: %s", name)
+	}
+	entry.handler = handler
+	r.entries[name] = entry
+	return nil
+}
