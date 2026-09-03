@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/workspace"
@@ -40,6 +41,7 @@ type Task struct {
 	Status      Status   `json:"status"`
 	Owner       *string  `json:"owner"`
 	BlockedBy   []string `json:"blockedBy"`
+	Worktree    *string  `json:"worktree,omitempty"`
 }
 
 // Config 定义任务存储所使用的工作区和目录。
@@ -52,6 +54,7 @@ type Config struct {
 type Manager struct {
 	dir     string
 	initErr error
+	mu      sync.Mutex
 }
 
 // New 创建任务管理器，并确保任务目录不能逃逸工作区。
@@ -74,9 +77,11 @@ func New(cfg Config) *Manager {
 
 // Create 使用随机 ID 独占创建任务，避免并发创建时覆盖已有记录。
 func (m *Manager) Create(subject, description string) (Task, error) {
-	if err := m.ready(true); err != nil {
+	unlock, err := m.lockStore()
+	if err != nil {
 		return Task{}, err
 	}
+	defer unlock()
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
 		return Task{}, errors.New("subject is required")
@@ -87,22 +92,12 @@ func (m *Manager) Create(subject, description string) (Task, error) {
 			return Task{}, err
 		}
 		task := Task{ID: id, Subject: subject, Description: description, Status: Pending, BlockedBy: []string{}}
-		data, err := encode(task)
-		if err != nil {
-			return Task{}, err
-		}
-		file, err := os.OpenFile(m.path(id), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if os.IsExist(err) {
+		if _, err := os.Stat(m.path(id)); err == nil {
 			continue
-		}
-		if err != nil {
+		} else if !os.IsNotExist(err) {
 			return Task{}, err
 		}
-		if _, err = file.Write(data); err == nil {
-			err = file.Close()
-		} else {
-			_ = file.Close()
-		}
+		err = m.save(task)
 		if err == nil {
 			logger.Info("[Task] Created %s: %s", task.ID, task.Subject)
 		}
@@ -132,7 +127,7 @@ func (m *Manager) Get(id string) (Task, error) {
 	if err := decoder.Decode(&task); err != nil {
 		return Task{}, fmt.Errorf("read task %s: %w", id, err)
 	}
-	if task.ID != id || strings.TrimSpace(task.Subject) == "" || !validStatus(task.Status) {
+	if task.ID != id || strings.TrimSpace(task.Subject) == "" || !validStatus(task.Status) || !validOwnership(task) {
 		return Task{}, fmt.Errorf("invalid task record: %s", id)
 	}
 	if task.BlockedBy == nil {
@@ -176,6 +171,12 @@ func (m *Manager) List() ([]Task, error) {
 // AddBlockedBy 为待处理且未认领的任务添加依赖。
 // 所有依赖会先完成存在性和环路校验，再一次性写入，避免部分更新。
 func (m *Manager) AddBlockedBy(id string, dependencies []string) (Task, error) {
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+
 	task, err := m.Get(id)
 	if err != nil {
 		return Task{}, err
@@ -220,6 +221,53 @@ func (m *Manager) AddBlockedBy(id string, dependencies []string) (Task, error) {
 
 // Claim 在全部前置任务完成后，将任务从 pending 推进到 in_progress。
 func (m *Manager) Claim(id, owner string) (Task, error) {
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+	return m.claimLocked(id, owner)
+}
+
+// ClaimNext 原子认领按 ID 排序后的首个 ready Task，避免扫描和认领之间发生竞争。
+func (m *Manager) ClaimNext(owner string) (Task, bool, error) {
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, false, err
+	}
+	defer unlock()
+
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return Task{}, false, errors.New("owner is required")
+	}
+	if current, err := m.currentLocked(owner); err != nil {
+		return Task{}, false, err
+	} else if current != nil {
+		return Task{}, false, fmt.Errorf("owner already has an in-progress task: %s", current.ID)
+	}
+	tasks, err := m.List()
+	if err != nil {
+		return Task{}, false, err
+	}
+	for _, candidate := range tasks {
+		if candidate.Status != Pending || candidate.Owner != nil {
+			continue
+		}
+		ready, err := m.canStart(candidate)
+		if err != nil {
+			return Task{}, false, err
+		}
+		if !ready {
+			continue
+		}
+		claimed, err := m.claimLocked(candidate.ID, owner)
+		return claimed, err == nil, err
+	}
+	return Task{}, false, nil
+}
+
+func (m *Manager) claimLocked(id, owner string) (Task, error) {
 	task, err := m.Get(id)
 	if err != nil {
 		return Task{}, err
@@ -238,6 +286,11 @@ func (m *Manager) Claim(id, owner string) (Task, error) {
 	if owner == "" {
 		return Task{}, errors.New("owner is required")
 	}
+	if current, err := m.currentLocked(owner); err != nil {
+		return Task{}, err
+	} else if current != nil {
+		return Task{}, fmt.Errorf("owner already has an in-progress task: %s", current.ID)
+	}
 	task.Status = InProgress
 	task.Owner = &owner
 	if err := m.save(task); err != nil {
@@ -249,6 +302,12 @@ func (m *Manager) Claim(id, owner string) (Task, error) {
 
 // Complete 仅允许任务所有者完成任务，并返回本次状态变化新解锁的下游任务。
 func (m *Manager) Complete(id, owner string) (Task, []Task, error) {
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, nil, err
+	}
+	defer unlock()
+
 	task, err := m.Get(id)
 	if err != nil {
 		return Task{}, nil, err
@@ -290,6 +349,54 @@ func (m *Manager) Complete(id, owner string) (Task, []Task, error) {
 		logger.Info("[Task] Unblocked: %s", strings.Join(subjects, ", "))
 	}
 	return task, unblocked, nil
+}
+
+// Current 返回 Owner 当前认领的 Task；同一 Owner 最多只能有一个进行中任务。
+func (m *Manager) Current(owner string) (*Task, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return nil, errors.New("owner is required")
+	}
+	return m.currentLocked(owner)
+}
+
+func (m *Manager) currentLocked(owner string) (*Task, error) {
+	tasks, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		if tasks[i].Status == InProgress && tasks[i].Owner != nil && *tasks[i].Owner == owner {
+			copyTask := tasks[i]
+			return &copyTask, nil
+		}
+	}
+	return nil, nil
+}
+
+// ReleaseOwner 将异常退出 Teammate 的进行中任务恢复为 pending。
+func (m *Manager) ReleaseOwner(owner string) (bool, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return false, errors.New("owner is required")
+	}
+	unlock, err := m.lockStore()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
+	task, err := m.currentLocked(owner)
+	if err != nil || task == nil {
+		return false, err
+	}
+	task.Status = Pending
+	task.Owner = nil
+	if err := m.save(*task); err != nil {
+		return false, err
+	}
+	logger.Warn("[Task] Released %s from owner %s", task.ID, owner)
+	return true, nil
 }
 
 // RunCreate 将 create_task 工具参数转换为任务创建操作。
@@ -440,15 +547,6 @@ func (m *Manager) dependsOn(start, target string) (bool, error) {
 	return false, nil
 }
 
-// save 将完整任务记录覆盖写回其 JSON 文件。
-func (m *Manager) save(task Task) error {
-	data, err := encode(task)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(m.path(task.ID), data, 0o644)
-}
-
 // ready 延迟返回初始化错误，并按需创建任务目录。
 func (m *Manager) ready(create bool) error {
 	if m.initErr != nil {
@@ -478,6 +576,13 @@ func encode(task Task) ([]byte, error) {
 
 func validStatus(status Status) bool {
 	return status == Pending || status == InProgress || status == Completed
+}
+
+func validOwnership(task Task) bool {
+	if task.Status == Pending {
+		return task.Owner == nil
+	}
+	return task.Owner != nil && strings.TrimSpace(*task.Owner) != ""
 }
 
 func object(input any) (map[string]any, error) {
