@@ -9,6 +9,8 @@ CLAUDE.md
 .transcripts/**
 .task_outputs/**
 .tasks/**
+.mailboxes/**
+.worktrees/**
 .memory/**
 !.memory/MEMORY.md
 .scheduled_tasks.json
