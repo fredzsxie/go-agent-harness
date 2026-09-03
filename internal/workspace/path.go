@@ -54,6 +54,11 @@ func Root() string {
 	return defaultResolver.Root()
 }
 
+// Default 返回主进程启动目录对应的 Resolver。
+func Default() *Resolver {
+	return defaultResolver
+}
+
 func Resolve(path string) (string, error) {
 	return defaultResolver.Resolve(path)
 }

@@ -7,6 +7,10 @@ import (
 )
 
 func RunWriteFile(ctx context.Context, input any) (string, error) {
+	return defaultTools.RunWriteFile(ctx, input)
+}
+
+func (t *Tools) RunWriteFile(_ context.Context, input any) (string, error) {
 	payload := input.(map[string]any)
 	path, _ := payload["path"].(string)
 	content, _ := payload["content"].(string)
@@ -14,7 +18,7 @@ func RunWriteFile(ctx context.Context, input any) (string, error) {
 		return "", os.ErrInvalid
 	}
 
-	fullPath, err := SafePath(path)
+	fullPath, err := t.SafePath(path)
 	if err != nil {
 		return "", err
 	}

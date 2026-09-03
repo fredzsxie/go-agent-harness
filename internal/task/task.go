@@ -399,6 +399,71 @@ func (m *Manager) ReleaseOwner(owner string) (bool, error) {
 	return true, nil
 }
 
+// BindWorktree 只允许为未认领的 pending Task 绑定唯一 Worktree 名称。
+func (m *Manager) BindWorktree(id, name string) (Task, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Task{}, errors.New("worktree name is required")
+	}
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+
+	task, err := m.Get(id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status != Pending || task.Owner != nil {
+		return Task{}, fmt.Errorf("task must be pending and unowned: %s", id)
+	}
+	if task.Worktree != nil {
+		return Task{}, fmt.Errorf("task already uses worktree %s: %s", *task.Worktree, id)
+	}
+	tasks, err := m.List()
+	if err != nil {
+		return Task{}, err
+	}
+	for _, candidate := range tasks {
+		if candidate.Worktree != nil && *candidate.Worktree == name {
+			return Task{}, fmt.Errorf("worktree is already bound to task %s: %s", candidate.ID, name)
+		}
+	}
+	task.Worktree = &name
+	if err := m.save(task); err != nil {
+		return Task{}, err
+	}
+	logger.Info("[Task] Bound %s to worktree %s", task.ID, name)
+	return task, nil
+}
+
+// ClearWorktree 只清理已完成 Task 的匹配绑定，避免移除仍可能执行的工作目录。
+func (m *Manager) ClearWorktree(id, name string) (Task, error) {
+	unlock, err := m.lockStore()
+	if err != nil {
+		return Task{}, err
+	}
+	defer unlock()
+
+	task, err := m.Get(id)
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Status != Completed {
+		return Task{}, fmt.Errorf("task must be completed before clearing worktree: %s", id)
+	}
+	if task.Worktree == nil || *task.Worktree != name {
+		return Task{}, fmt.Errorf("task is not bound to worktree %s: %s", name, id)
+	}
+	task.Worktree = nil
+	if err := m.save(task); err != nil {
+		return Task{}, err
+	}
+	logger.Info("[Task] Cleared worktree %s from %s", name, task.ID)
+	return task, nil
+}
+
 // RunCreate 将 create_task 工具参数转换为任务创建操作。
 func (m *Manager) RunCreate(_ context.Context, input any) (string, error) {
 	args, err := object(input)

@@ -80,3 +80,52 @@ func TestReadFileSupportsUTF8AndLineLimit(t *testing.T) {
 		t.Fatalf("unexpected limited read: %q", output)
 	}
 }
+
+func TestToolsUseBoundWorkspace(t *testing.T) {
+	root := t.TempDir()
+	resolver, err := workspace.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := New(resolver)
+	if _, err := tools.RunWriteFile(context.Background(), map[string]any{"path": "note.txt", "content": "bound"}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tools.RunReadFile(context.Background(), map[string]any{"path": "note.txt"})
+	if err != nil || output != "bound" {
+		t.Fatalf("unexpected bound read: %q, %v", output, err)
+	}
+	pwd, err := tools.RunBash(context.Background(), map[string]any{"command": "pwd"})
+	if err != nil || strings.TrimSpace(pwd) != resolver.Root() {
+		t.Fatalf("bash cwd = %q, %v; want %q", pwd, err, resolver.Root())
+	}
+	if _, err := tools.RunReadFile(context.Background(), map[string]any{"path": "../outside.txt"}); err == nil {
+		t.Fatal("bound tools should reject paths outside their workspace")
+	}
+}
+
+func TestDynamicToolsResolveWorkspacePerCall(t *testing.T) {
+	first, err := workspace.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := workspace.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := first
+	tools := NewDynamic(func() (*workspace.Resolver, error) { return current, nil })
+	if _, err := tools.RunWriteFile(context.Background(), map[string]any{"path": "first.txt", "content": "one"}); err != nil {
+		t.Fatal(err)
+	}
+	current = second
+	if _, err := tools.RunWriteFile(context.Background(), map[string]any{"path": "second.txt", "content": "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(first.Root(), "first.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(second.Root(), "second.txt")); err != nil {
+		t.Fatal(err)
+	}
+}

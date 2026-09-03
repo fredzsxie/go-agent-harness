@@ -13,6 +13,10 @@ import (
 const maxGlobMatches = 200
 
 func RunGlob(ctx context.Context, input any) (string, error) {
+	return defaultTools.RunGlob(ctx, input)
+}
+
+func (t *Tools) RunGlob(ctx context.Context, input any) (string, error) {
 	pattern, _ := input.(map[string]any)["pattern"].(string)
 	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
 	if pattern == "" {
@@ -22,7 +26,7 @@ func RunGlob(ctx context.Context, input any) (string, error) {
 		return "", fmt.Errorf("glob pattern must stay inside workspace")
 	}
 
-	root, err := SafePath(".")
+	root, err := t.SafePath(".")
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +53,7 @@ func RunGlob(ctx context.Context, input any) (string, error) {
 		if !matched {
 			return nil
 		}
-		if _, err := SafePath(relative); err != nil {
+		if _, err := t.SafePath(relative); err != nil {
 			return nil
 		}
 		matches = append(matches, relative)

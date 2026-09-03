@@ -20,6 +20,10 @@ var blockedCommands = []string{
 }
 
 func RunBash(ctx context.Context, input any) (string, error) {
+	return defaultTools.RunBash(ctx, input)
+}
+
+func (t *Tools) RunBash(ctx context.Context, input any) (string, error) {
 	command, _ := input.(map[string]any)["command"].(string)
 	if command == "" {
 		return "", fmt.Errorf("missing command")
@@ -32,7 +36,12 @@ func RunBash(ctx context.Context, input any) (string, error) {
 		}
 	}
 
+	resolver, err := t.currentResolver()
+	if err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
+	cmd.Dir = resolver.Root()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), err

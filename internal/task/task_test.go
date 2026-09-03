@@ -225,3 +225,50 @@ func TestReleaseOwnerReturnsTaskToBoard(t *testing.T) {
 		t.Fatalf("released task should be pending and unowned: %#v", stored)
 	}
 }
+
+func TestWorktreeBindingLifecycle(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	first, err := manager.Create("Isolated work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Create("Other work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bound, err := manager.BindWorktree(first.ID, "feature-a")
+	if err != nil || bound.Worktree == nil || *bound.Worktree != "feature-a" {
+		t.Fatalf("bind failed: %#v, %v", bound, err)
+	}
+	if _, err := manager.BindWorktree(second.ID, "feature-a"); err == nil {
+		t.Fatal("one worktree must not be bound to multiple tasks")
+	}
+	if _, err := manager.ClearWorktree(first.ID, "feature-a"); err == nil {
+		t.Fatal("pending task binding must not be cleared")
+	}
+	if _, err := manager.Claim(first.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.Complete(first.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := manager.ClearWorktree(first.ID, "feature-a")
+	if err != nil || cleared.Worktree != nil {
+		t.Fatalf("clear failed: %#v, %v", cleared, err)
+	}
+}
+
+func TestClaimedTaskCannotBindWorktree(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	created, err := manager.Create("Owned work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Claim(created.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.BindWorktree(created.ID, "feature-a"); err == nil {
+		t.Fatal("claimed task must not accept a worktree binding")
+	}
+}
