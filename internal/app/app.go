@@ -203,7 +203,7 @@ func (a *App) startCronRuntime(parent context.Context) func() {
 	}()
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(200 * time.Millisecond)
+		ticker := time.NewTicker(time.Second) // 如果Agent忙碌中，会尝试多次
 		defer ticker.Stop()
 		for {
 			select {
@@ -242,6 +242,7 @@ func (a *App) runScheduledTurn(ctx context.Context) {
 	)
 	if !acquired {
 		a.cron.Restore(jobs)
+		logger.Warn("[cron] agent busy, retry later")
 		return
 	}
 	if err != nil {
