@@ -73,7 +73,7 @@ func TestRuntimeKeepsTeammateAliveUntilShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shutdown := waitTeamEvents(t, bus, func(messages []Message) bool {
+	shutdown := waitLeadRuntimeEvents(t, runtime, func(messages []Message) bool {
 		return hasMessageType(messages, MessageShutdownResponse)
 	})
 	var response Message
@@ -85,9 +85,9 @@ func TestRuntimeKeepsTeammateAliveUntilShutdown(t *testing.T) {
 	if response.Metadata.RequestID != requestID {
 		t.Fatalf("shutdown response mismatch: %#v", response)
 	}
-	matched, err := requests.Match(response)
-	if err != nil || matched.Status != RequestApproved {
-		t.Fatalf("shutdown protocol did not complete: %#v, %v", matched, err)
+	matched, ok := requests.Get(requestID)
+	if !ok || matched.Status != RequestApproved {
+		t.Fatalf("shutdown protocol did not complete: %#v", matched)
 	}
 	waitFor(t, func() bool { return len(runtime.List()) == 0 })
 }
@@ -256,6 +256,23 @@ func waitTeamEvents(t *testing.T, bus *Bus, done func([]Message) bool) []Message
 		messages, err := bus.Wait(ctx, "lead", 50*time.Millisecond)
 		if err != nil {
 			t.Fatalf("wait lead inbox: %v; events=%#v", err, all)
+		}
+		all = append(all, messages...)
+		if done(all) {
+			return all
+		}
+	}
+}
+
+func waitLeadRuntimeEvents(t *testing.T, runtime *Runtime, done func([]Message) bool) []Message {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	all := make([]Message, 0, 4)
+	for {
+		messages, err := runtime.WaitLeadEvents(ctx, 50*time.Millisecond)
+		if err != nil {
+			t.Fatalf("wait runtime lead events: %v; events=%#v", err, all)
 		}
 		all = append(all, messages...)
 		if done(all) {

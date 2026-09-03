@@ -1,6 +1,6 @@
 # learn-claude-code：Go 版代码对照
 
-课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s12 Cron Scheduler**；s13–s17 只预留 package 文档，不包含运行逻辑。
+课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s13 Agent Teams**；s14–s17 只预留 package 文档或接口，不包含运行逻辑。
 
 ## 已实现章节
 
@@ -18,11 +18,12 @@
 | s10 Task System | `internal/task/` | 持久任务图、依赖、claim 与 complete |
 | s11 Background Tasks | `internal/runtime/background.go` | 显式异步执行，结果在后续 turn 注入 |
 | s12 Cron Scheduler | `internal/runtime/cron.go`, `internal/runtime/cron_store.go` | 到期队列、空闲投递、失败恢复和 durable job |
+| s13 Agent Teams | `internal/team/`, `internal/worktree/`, `internal/app/` | 独立上下文、文件邮箱、原子认领、Plan Gate、类型化控制协议与可选 Worktree |
 
 ## 核心调用关系
 
 ```text
-CLI / Cron
+CLI / Cron / Team Event
     -> agent.Session
     -> agent.Runner
     -> agentctx.Manager.Prepare
@@ -38,11 +39,17 @@ CLI / Cron
 
 Background 与 Cron 同属 `internal/runtime`，但状态完全隔离：`BackgroundManager` 管理命令生命周期，`CronScheduler` 管理未来输入和持久化。Cron 使用 Session 的非阻塞入口，只有成功占用 Session 后才切换为非交互权限模式。
 
+Agent Teams 的 `team.Runtime` 为每个 Teammate 维护独立 `messages[]` 和受限 Registry。`.mailboxes/` 负责跨线程投递，`.tasks/` 是共享任务状态源；IDLE 先处理消息，再扫描并认领 ready Task。Lead 邮箱事件由 App 单点消费，并通过同一个 Session 非阻塞入口启动新 turn。
+
+Plan Approval 与 Shutdown 使用 `request_id`、类型、参与方和状态共同匹配。Task 可选绑定 Git Worktree；动态 Resolver 让 Bash 和文件工具使用当前 assignment 目录，失效绑定采用 fail-closed。Worktree 删除保留为 Host API，不暴露给模型。
+
 ## 日志与注释
 
-运行日志只使用：
+运行日志统一使用：
 
+- `logger.Debug(format, args...)`
 - `logger.Info(format, args...)`
+- `logger.Warn(format, args...)`
 - `logger.Error(format, args...)`
 
 标准格式为 `日期 时间 [Level] 原内容`。CLI、最终回答、Todo 展示和权限询问属于交互输出，不使用 Logger。
@@ -53,13 +60,12 @@ Background 与 Cron 同属 `internal/runtime`，但状态完全隔离：`Backgro
 
 | 章节 | 占位位置 | 当前限制 |
 |---|---|---|
-| s13 Agent Teams | `internal/team/`, `internal/worktree/` | 不创建 teammate、mailbox 或 Worktree |
 | s14 MCP Plugin | `internal/mcp/` | 不连接 MCP Server，不注册 MCP 工具 |
 | s15 Integrated Harness | `internal/app/` | 不新增独立 package |
 | s16 Workflow Runtime | `internal/workflow/` | 不定义 Step、Checkpoint 或执行器 |
 | s17 Goal Loop | `internal/goal/` | 不实现 Evaluator、自动续轮或 `/goal` |
 
-开始下一章前保持这些 package 无副作用：不注册工具、不启动 goroutine、不读写文件、不调用 LLM。
+开始下一章前保持这些占位 package 无副作用：不注册工具、不启动 goroutine、不读写文件、不调用 LLM。
 
 ## 验证
 

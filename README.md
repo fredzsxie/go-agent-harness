@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s12 Cron Scheduler**。s01–s12 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s13–s17 暂不实现。
+当前学习进度到 **s13 Agent Teams**。s01–s13 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s14–s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -32,7 +32,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s10 | Task System | 已完成 | `internal/task/`, `.tasks/` |
 | s11 | Background Tasks | 已完成 | `internal/runtime/`, `internal/agent/runner.go` |
 | s12 | Cron Scheduler | 已完成 | `internal/runtime/cron.go`, `internal/app/app.go` |
-| s13 | Agent Teams | 仅占位 | `internal/team/`, `internal/worktree/` |
+| s13 | Agent Teams | 已完成 | `internal/team/`, `internal/worktree/`, `internal/app/app.go` |
 | s14 | MCP Plugin | 仅占位 | `internal/mcp/` |
 | s15 | Integrated Harness | 仅预留 | 继续使用 `internal/app/` 作为组合根 |
 | s16 | Workflow Runtime | 仅占位 | `internal/workflow/` |
@@ -254,6 +254,10 @@ messages := []protocol.Message{
 - `task`，启动一次性 subagent
 - `load_skill`
 - `compact`
+- `create_task`、`update_task`、`list_tasks`、`get_task`、`claim_task`、`complete_task`
+- `schedule_cron`、`list_crons`、`cancel_cron`
+- `spawn_teammate`、`list_teammates`、`send_message`、`request_shutdown`
+- `request_plan`、`review_plan`、`create_worktree`
 
 所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。
 
@@ -293,6 +297,32 @@ Subagent 使用独立的 `messages[]` 和受限工具池，不会继续派生子
 默认任务为 recurring 且 durable，持久化到 `.scheduled_tasks.json` 并使用临时文件原子替换。重启会恢复任务定义及尚未确认的投递，但不会补跑进程关闭期间错过的时间。定时 turn 不允许弹出交互式权限确认，需要确认的操作会直接拒绝。
 
 s11 与 s12 同放在 `internal/runtime/`，但分别由 `BackgroundManager` 与 `CronScheduler` 管理。前者负责执行和收集后台命令，后者负责未来时间的调度与持久化；二者只共享应用生命周期，不共享状态。
+
+### Agent Teams
+
+Lead 可以在用户确认团队方案后，通过 `spawn_teammate` 启动拥有独立消息历史和工具池的持久化 Teammate。Teammate 在 WORK 与 IDLE 之间循环：有直接消息时优先处理邮箱，没有消息时才扫描共享 Task Board 并原子认领 ready Task。
+
+```text
+Lead / App
+  ├─ .mailboxes/<name>.jsonl ──> Teammate WORK
+  ├─ .tasks/<id>.json         ──> IDLE 自动认领
+  └─ Team events              <── result / idle / protocol response
+                                      |
+                               Session 空闲后启动 Lead turn
+```
+
+普通协作消息、`result`、`idle_notification` 和控制事件通过文件邮箱传递，不共享 Lead 与 Teammate 的 `messages[]`。App 是 `lead` 邮箱的唯一消费者；Lead 忙碌时事件保留在内存待投递队列，随后通过 `Session.TrySubmit` 重试，不要求模型轮询 inbox。
+
+Shutdown 与 Plan Approval 使用 `request_id` 关联请求和响应，并校验协议类型、发送方、接收方和状态，避免错配或重复响应改变状态。启用 Plan Gate 后，计划获批前禁止 Teammate 使用 Bash、写入、编辑或完成 Task；审批还会绑定当前 Task ID 和工作版本，过期计划不能解锁新任务。
+
+Task 可以选择绑定 `.worktrees/<name>`，对应分支为 `wt/<name>`。Teammate 的 Bash 和文件工具会动态使用 Task Workspace；绑定损坏时直接失败，不回退主仓库。Worktree 只隔离 Git 工作目录和分支，不是安全沙箱。Task 完成后由 Host 决定检查、合并或删除 Worktree，模型没有删除工具。
+
+Lead 与 Teammate 工具边界：
+
+- Lead 可以创建/更新 Task、创建 Worktree、启动和管理 Teammate。
+- Teammate 只能读取 Task、认领、完成、发送消息和提交计划。
+- Teammate 不会获得 `update_task`、Cron、Subagent、Compact 或 Worktree 删除能力。
+- `result` 与 `idle_notification` 分开投递，分别表示工作产出和可再次接单状态。
 
 ### 日志
 
@@ -340,9 +370,9 @@ go-agent-harness/
     ├── prompt/       # 运行时 prompt 组装
     ├── task/         # s10 持久化任务图
     ├── runtime/      # s11 Background 与 s12 Cron
-    ├── logger/       # 带时间及 INFO/ERROR Level 的极简日志
-    ├── team/         # s13 仅占位
-    ├── worktree/     # s13 仅占位
+    ├── logger/       # 带时间及 Debug/Info/Warn/Error Level 的极简日志
+    ├── team/         # s13 Mailbox、Protocol、Plan Gate 与 Teammate Runtime
+    ├── worktree/     # s13 Task 绑定的 Git Worktree
     ├── mcp/          # s14 仅占位
     ├── workflow/     # s16 仅占位
     └── goal/         # s17 仅占位
@@ -374,4 +404,4 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go vet ./...
 
 ## 下一步
 
-下一课从新版 **s13 Agent Teams** 开始。s13–s17 当前文件只声明包用途，不注册工具、不启动 goroutine、不访问文件，也不调用 LLM。
+下一课从新版 **s14 MCP Plugin** 开始。s14–s17 继续只保留对应文件或接口，不实现具体运行逻辑。

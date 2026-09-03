@@ -522,6 +522,9 @@ func (m *Manager) RunList(_ context.Context, _ any) (string, error) {
 		if len(task.BlockedBy) > 0 {
 			line += " (blockedBy: " + strings.Join(task.BlockedBy, ", ") + ")"
 		}
+		if task.Worktree != nil {
+			line += " (worktree: " + *task.Worktree + ")"
+		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n"), nil

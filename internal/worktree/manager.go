@@ -224,6 +224,26 @@ func (m *Manager) Remove(ctx context.Context, name string, discard bool) error {
 	return nil
 }
 
+// RunCreate 将 Lead 的 create_worktree 工具参数转换为 Task 绑定操作。
+func (m *Manager) RunCreate(ctx context.Context, input any) (string, error) {
+	args, ok := input.(map[string]any)
+	if !ok {
+		return "", errors.New("tool input must be an object")
+	}
+	name, _ := args["name"].(string)
+	taskID, _ := args["task_id"].(string)
+	name = strings.TrimSpace(name)
+	taskID = strings.TrimSpace(taskID)
+	if name == "" || taskID == "" {
+		return "", errors.New("name and task_id are required")
+	}
+	path, err := m.Create(ctx, name, taskID)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Worktree %q created at %s for task %s", name, path, taskID), nil
+}
+
 func (m *Manager) prepare(ctx context.Context, name string) (string, string, error) {
 	if err := m.ready(ctx); err != nil {
 		return "", "", err

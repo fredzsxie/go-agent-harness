@@ -149,6 +149,19 @@ func (r *Requests) Get(id string) (Request, bool) {
 	return cloneRequest(*request), true
 }
 
+// Cancel 删除尚未投递成功的 pending 请求，避免传输失败遗留不可达状态。
+func (r *Requests) Cancel(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	request, ok := r.items[id]
+	if !ok || request.Status != RequestPending {
+		return false
+	}
+	delete(r.items, id)
+	logger.Debug("[TeamProtocol] Canceled undelivered request %s", id)
+	return true
+}
+
 func (r *Requests) newIDLocked() (string, error) {
 	for range 100 {
 		data := make([]byte, 4)

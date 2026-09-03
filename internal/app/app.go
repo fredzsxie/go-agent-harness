@@ -23,15 +23,24 @@ import (
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
 	"go-agent-harness/internal/task"
+	"go-agent-harness/internal/team"
 	"go-agent-harness/internal/todo"
+	"go-agent-harness/internal/worktree"
 )
 
 type App struct {
-	session        *agent.Session
+	session        appSession
 	cron           *agentruntime.CronScheduler
+	team           *team.Runtime
 	nonInteractive *atomic.Bool
 	in             io.Reader
 	out            io.Writer
+}
+
+type appSession interface {
+	Submit(context.Context, ...protocol.Message) (agent.RunResult, error)
+	TrySubmit(context.Context, func(), func(), ...protocol.Message) (agent.RunResult, bool, error)
+	Close()
 }
 
 func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
@@ -57,8 +66,22 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	registerTaskTool(registry, subagentManager)
 
 	// Task System 维护跨 Session 的持久任务图。
-	taskManager := task.New(task.Config{})
+	taskManager := task.New(task.Config{WorkDir: workDir})
 	registerTaskSystemTools(registry, taskManager)
+
+	// Team Runtime 复用受限基础工具，但为每个 Teammate 动态绑定 Task Workspace。
+	teamBus := team.NewBus(team.BusConfig{WorkDir: workDir})
+	teamRequests := team.NewRequests()
+	var teamRuntime *team.Runtime
+	worktreeManager := worktree.New(worktree.Config{
+		WorkDir: workDir, Tasks: taskManager,
+		InUse: func(path string) bool { return teamRuntime != nil && teamRuntime.InUse(path) },
+	})
+	teamRuntime = team.NewRuntime(team.RuntimeConfig{
+		Model: model, BaseTools: subRegistry, Tasks: taskManager,
+		Worktrees: worktreeManager, Bus: teamBus, Requests: teamRequests,
+	})
+	registerTeamTools(registry, teamRuntime, worktreeManager)
 
 	// Cron Scheduler 只注册到主 Agent。
 	cronManager := agentruntime.NewCron(agentruntime.CronConfig{WorkDir: workDir})
@@ -76,6 +99,7 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	return &App{
 		session:        agent.NewSession(runner),
 		cron:           cronManager,
+		team:           teamRuntime,
 		nonInteractive: nonInteractive,
 		in:             in,
 		out:            out,
@@ -83,10 +107,15 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	// 无论正常退出还是读取失败，都要停止并回收后台命令。
+	// defer 逆序停止事件投递、Cron、Teammate 和 Session，避免退出期间再进入 Agent Loop。
 	defer a.session.Close()
+	if a.team != nil {
+		defer a.team.Close()
+	}
 	stopCron := a.startCronRuntime(ctx)
 	defer stopCron()
+	stopTeam := a.startTeamEventRuntime(ctx)
+	defer stopTeam()
 
 	fmt.Fprintln(a.out, "go-agent-harness")
 	fmt.Fprintln(a.out, "Type a task, or type q/exit to quit.")
@@ -95,6 +124,76 @@ func (a *App) Run(ctx context.Context) error {
 		return a.runInteractive(ctx, stdin, stdout)
 	}
 	return a.runScanner(ctx)
+}
+
+// startTeamEventRuntime 等待 Lead 邮箱，并在 Session 空闲后启动事件驱动的新 turn。
+func (a *App) startTeamEventRuntime(parent context.Context) func() {
+	if a.team == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var pending []team.Message
+		for {
+			if len(pending) == 0 {
+				messages, err := a.team.WaitLeadEvents(ctx, time.Second)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					logger.Error("[TeamRuntime] Lead inbox: %v", err)
+					continue
+				}
+				pending = messages
+				if len(pending) == 0 {
+					continue
+				}
+			}
+
+			if a.deliverTeamEvents(ctx, pending) {
+				pending = nil
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		wg.Wait()
+	}
+}
+
+// deliverTeamEvents 使用非阻塞 Session 入口；忙碌或失败时由上层保留原事件重试。
+func (a *App) deliverTeamEvents(ctx context.Context, messages []team.Message) bool {
+	content := team.FormatEvents(messages)
+	if content == "" {
+		return true
+	}
+	result, acquired, err := a.session.TrySubmit(ctx,
+		func() { a.nonInteractive.Store(true) },
+		func() { a.nonInteractive.Store(false) },
+		protocol.Message{Role: protocol.RoleUser, Content: content},
+	)
+	if !acquired {
+		logger.Debug("[TeamRuntime] Lead busy, retry %d event(s) later", len(messages))
+		return false
+	}
+	if err != nil {
+		logger.Error("[TeamRuntime] Event delivery failed: %v", err)
+		return false
+	}
+	logger.Info("[TeamRuntime] Delivered %d event(s) to Lead", len(messages))
+	if result.Output != "" {
+		fmt.Fprintln(a.out, result.Output)
+	}
+	return true
 }
 
 // runInteractive 对真实终端使用 readline，保证光标、退格和宽字符显示正确。

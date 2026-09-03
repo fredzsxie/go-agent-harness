@@ -76,3 +76,17 @@ func TestPlanApprovalKeepsWorkIdentityAndRejection(t *testing.T) {
 		t.Fatalf("unexpected rejection: %#v, %v", matched, err)
 	}
 }
+
+func TestCancelRemovesOnlyPendingRequest(t *testing.T) {
+	requests := NewRequests()
+	pending, err := requests.Open(RequestShutdown, "lead", "alice", "Stop.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !requests.Cancel(pending.ID) {
+		t.Fatal("pending request should be canceled")
+	}
+	if _, ok := requests.Get(pending.ID); ok {
+		t.Fatal("canceled request should be removed")
+	}
+}

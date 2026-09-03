@@ -271,6 +271,7 @@ func (r *Runtime) RequestShutdown(name string) (string, error) {
 		return "", err
 	}
 	if _, err := r.bus.SendMessage(request.Message()); err != nil {
+		r.requests.Cancel(request.ID)
 		return "", err
 	}
 	logger.Info("[TeamRuntime] Shutdown requested from %s (%s)", name, request.ID)

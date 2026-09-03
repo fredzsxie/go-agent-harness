@@ -130,6 +130,7 @@ func (p *teammate) runSubmitPlan(_ context.Context, input any) (string, error) {
 	p.planRequestID = request.ID
 	p.runtime.mu.Unlock()
 	if _, err := p.runtime.bus.SendMessage(request.Message()); err != nil {
+		p.runtime.requests.Cancel(request.ID)
 		p.runtime.mu.Lock()
 		if p.planRequestID == request.ID {
 			p.gate = previousGate

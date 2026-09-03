@@ -5,6 +5,9 @@ import (
 
 	"go-agent-harness/internal/agent"
 	agentruntime "go-agent-harness/internal/runtime"
+	"go-agent-harness/internal/task"
+	"go-agent-harness/internal/team"
+	"go-agent-harness/internal/worktree"
 )
 
 func TestBackgroundBashOptionIsMainAgentOnly(t *testing.T) {
@@ -18,6 +21,30 @@ func TestBackgroundBashOptionIsMainAgentOnly(t *testing.T) {
 	}
 	if _, ok := subBash.Properties["run_in_background"]; ok {
 		t.Fatal("subagent Bash tool should remain synchronous")
+	}
+}
+
+func TestTeamToolsAreLeadOnly(t *testing.T) {
+	mainRegistry := newDefaultRegistry()
+	base := newSubagentRegistry()
+	workDir := t.TempDir()
+	tasks := task.New(task.Config{WorkDir: workDir})
+	worktrees := worktree.New(worktree.Config{WorkDir: workDir, Tasks: tasks})
+	runtime := team.NewRuntime(team.RuntimeConfig{
+		BaseTools: base, Tasks: tasks, Worktrees: worktrees,
+		Bus: team.NewBus(team.BusConfig{WorkDir: workDir}), Requests: team.NewRequests(),
+	})
+	defer runtime.Close()
+	registerTeamTools(mainRegistry, runtime, worktrees)
+	mainTools := toolNames(mainRegistry.Specs())
+	subTools := toolNames(base.Specs())
+	for _, name := range []string{"spawn_teammate", "list_teammates", "send_message", "request_shutdown", "request_plan", "review_plan", "create_worktree"} {
+		if !mainTools[name] {
+			t.Fatalf("Lead is missing %s", name)
+		}
+		if subTools[name] {
+			t.Fatalf("subagent should not expose %s", name)
+		}
 	}
 }
 

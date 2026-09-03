@@ -61,3 +61,17 @@ func TestBuilderAddsMemoryOnlyWhenPresent(t *testing.T) {
 		t.Fatal("non-empty context should load the memory section")
 	}
 }
+
+func TestTeamInstructionsRequireSpawnTool(t *testing.T) {
+	builder := NewBuilder("skills", "/repo")
+	without := builder.Get(Context{EnabledTools: []string{"create_task"}})
+	if strings.Contains(without, "propose a small team") {
+		t.Fatal("team instructions should not appear without spawn_teammate")
+	}
+	with := builder.Get(Context{EnabledTools: []string{"spawn_teammate", "create_worktree"}})
+	for _, want := range []string{"propose a small team", "wait for the user's confirmation", "instead of polling", "Shut teammates down"} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("team instructions missing %q:\n%s", want, with)
+		}
+	}
+}

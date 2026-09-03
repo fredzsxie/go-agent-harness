@@ -82,6 +82,9 @@ func (b *Builder) assemble(context Context) string {
 	if hasTool(context.EnabledTools, "schedule_cron") {
 		sections = append(sections, "Use schedule_cron for work that should start at a future local time. Cron jobs run only while this Agent process is running; durable jobs are restored after restart but missed times are not replayed.")
 	}
+	if hasTool(context.EnabledTools, "spawn_teammate") {
+		sections = append(sections, "For substantial parallel work, first propose a small team with clear responsibilities and wait for the user's confirmation. Do not call spawn_teammate before confirmation. After confirmation, create Tasks for delegated work and pass their IDs when spawning teammates. Use create_worktree only when an isolated Git working directory prevents conflicting edits. After spawning, end the current turn instead of polling; Team events will be delivered by the runtime. Shut teammates down after coordination completes.")
+	}
 	if context.Memories != "" {
 		sections = append(sections, context.Memories)
 	}
