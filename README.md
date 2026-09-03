@@ -296,10 +296,18 @@ s11 与 s12 同放在 `internal/runtime/`，但分别由 `BackgroundManager` 与
 
 ### 日志
 
-运行日志统一使用 `logger.Info` 和 `logger.Error`。格式为本地日期时间、Level 和原日志内容，例如：
+运行日志统一使用 `logger.Debug`、`logger.Info`、`logger.Warn` 和 `logger.Error`。通过 `LOG_MODE` 设置最低输出等级，默认为 `info`；例如 `warn` 只输出 Warn 和 Error，只有 `debug` 会输出 Debug。格式为本地日期时间、Level 和原日志内容，例如：
+
+| `LOG_MODE` | 输出等级 |
+|---|---|
+| `debug` | Debug、Info、Warn、Error |
+| `info` | Info、Warn、Error |
+| `warn` | Warn、Error |
+| `error` | Error |
 
 ```text
 2026/09/02 15:04:05 [INFO] [Background] started bg_0001: go test ./...
+2026/09/02 15:04:05 [WARN] [cron] agent busy, retry later
 2026/09/02 15:04:06 [ERROR] [cron] delivery failed: context canceled
 ```
 
@@ -348,6 +356,7 @@ go-agent-harness/
 ANTHROPIC_API_KEY=your_api_key
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 MODEL_ID=claude-sonnet-4-6
+LOG_MODE=info
 ```
 
 运行：

@@ -14,6 +14,11 @@ func main() {
 	if err := config.LoadEnvFile(".env"); err != nil {
 		exit(err)
 	}
+	mode, err := logger.ParseMode(os.Getenv("LOG_MODE"))
+	if err != nil {
+		exit(err)
+	}
+	logger.SetMode(mode)
 	cfg, err := config.LoadLLMConfig()
 	if err != nil {
 		exit(err)
