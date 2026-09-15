@@ -20,13 +20,19 @@ func newDocsServer() (*Client, error) {
 		{Name: "get_version", Description: "Get the documentation API version.", InputSchema: objectSchema(), Annotations: map[string]any{"readOnlyHint": true}},
 	}, map[string]Handler{
 		"search": func(_ context.Context, input map[string]any) (string, error) {
+			if err := rejectUnknown(input, "query"); err != nil {
+				return "", err
+			}
 			query, err := requiredString(input, "query")
 			if err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("[docs] Found 3 results for %q", query), nil
 		},
-		"get_version": func(context.Context, map[string]any) (string, error) {
+		"get_version": func(_ context.Context, input map[string]any) (string, error) {
+			if err := rejectUnknown(input); err != nil {
+				return "", err
+			}
 			return "[docs] API v2.1.0", nil
 		},
 	})
@@ -40,6 +46,9 @@ func newDeployServer() (*Client, error) {
 		{Name: "status", Description: "Check deployment status.", InputSchema: objectSchema("service"), Annotations: map[string]any{"readOnlyHint": true}},
 	}, map[string]Handler{
 		"trigger": func(_ context.Context, input map[string]any) (string, error) {
+			if err := rejectUnknown(input, "service"); err != nil {
+				return "", err
+			}
 			service, err := requiredString(input, "service")
 			if err != nil {
 				return "", err
@@ -47,6 +56,9 @@ func newDeployServer() (*Client, error) {
 			return "[deploy] Triggered: " + service, nil
 		},
 		"status": func(_ context.Context, input map[string]any) (string, error) {
+			if err := rejectUnknown(input, "service"); err != nil {
+				return "", err
+			}
 			service, err := requiredString(input, "service")
 			if err != nil {
 				return "", err
@@ -71,4 +83,17 @@ func requiredString(input map[string]any, name string) (string, error) {
 		return "", fmt.Errorf("%s is required", name)
 	}
 	return strings.TrimSpace(value), nil
+}
+
+func rejectUnknown(input map[string]any, allowed ...string) error {
+	known := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		known[name] = struct{}{}
+	}
+	for name := range input {
+		if _, ok := known[name]; !ok {
+			return fmt.Errorf("unexpected argument: %s", name)
+		}
+	}
+	return nil
 }

@@ -126,6 +126,18 @@ func AuthorizeNonInteractive(toolName string, args map[string]any) error {
 	return authorize(toolName, args, false)
 }
 
+// AuthorizeExternal 对未被 Host Policy 放行的外部工具执行统一确认。
+func AuthorizeExternal(toolName string, args map[string]any, interactive bool) error {
+	const reason = "External tool requires approval"
+	if !interactive {
+		return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
+	}
+	if AskUser(toolName, args, reason) == "deny" {
+		return fmt.Errorf("permission denied: %s", reason)
+	}
+	return nil
+}
+
 func authorize(toolName string, args map[string]any, interactive bool) error {
 	if toolName == "bash" {
 		command, _ := args["command"].(string)
@@ -136,7 +148,7 @@ func authorize(toolName string, args map[string]any, interactive bool) error {
 
 	if reason := CheckRules(toolName, args); reason != "" {
 		if !interactive {
-			return fmt.Errorf("permission denied: scheduled turns cannot request interactive approval")
+			return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
 		}
 		decision := AskUser(toolName, args, reason)
 		if decision == "deny" {

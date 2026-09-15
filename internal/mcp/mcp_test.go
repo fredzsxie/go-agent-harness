@@ -52,6 +52,12 @@ func TestManagerConnectsAndDispatchesMockTools(t *testing.T) {
 	if manager.Policy("mcp__unknown__read") != PolicyConfirm {
 		t.Fatal("unknown external tools must require confirmation")
 	}
+	if _, err := registry.Dispatch(context.Background(), "mcp__docs__search", map[string]any{}); err == nil || !strings.Contains(err.Error(), "query is required") {
+		t.Fatalf("missing input should return an MCP tool error: %v", err)
+	}
+	if _, err := registry.Dispatch(context.Background(), "mcp__docs__get_version", map[string]any{"extra": true}); err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("unexpected input should return an MCP tool error: %v", err)
+	}
 
 	again, err := manager.Connect("docs")
 	if err != nil || !strings.Contains(again, "already connected") {

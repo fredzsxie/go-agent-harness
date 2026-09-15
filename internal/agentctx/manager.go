@@ -23,6 +23,7 @@ type Manager struct {
 	memory        *memory.Manager
 	promptBuilder *prompt.Builder
 	legacyPrompt  string
+	memorySection string
 }
 
 func New(builder *prompt.Builder, legacyPrompt string) *Manager {
@@ -45,9 +46,19 @@ func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message,
 		return "", err
 	}
 	if m.promptBuilder == nil {
+		m.memorySection = section
 		return prompt.Build(m.legacyPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
 	}
+	m.memorySection = section
 	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: section}), nil
+}
+
+// RefreshPrompt 复用本次请求已经召回的 Memory，仅刷新动态工具上下文。
+func (m *Manager) RefreshPrompt(toolNames []string) string {
+	if m.promptBuilder == nil {
+		return prompt.Build(m.legacyPrompt, m.memorySection, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn.")
+	}
+	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: m.memorySection})
 }
 
 func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {

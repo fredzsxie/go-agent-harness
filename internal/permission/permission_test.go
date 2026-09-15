@@ -14,3 +14,10 @@ func TestNonInteractiveAuthorizationRejectsApprovalPrompt(t *testing.T) {
 		t.Fatalf("safe command should remain allowed: %v", err)
 	}
 }
+
+func TestExternalAuthorizationFailsClosedWithoutInteractiveInput(t *testing.T) {
+	err := AuthorizeExternal("mcp__deploy__trigger", map[string]any{"service": "web"}, false)
+	if err == nil || !strings.Contains(err.Error(), "non-interactive turns cannot request") {
+		t.Fatalf("expected external tool denial, got %v", err)
+	}
+}

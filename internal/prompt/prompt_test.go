@@ -75,3 +75,17 @@ func TestTeamInstructionsRequireSpawnTool(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPInstructionsRequireConnectTool(t *testing.T) {
+	builder := NewBuilder("skills", "/repo")
+	without := builder.Get(Context{EnabledTools: []string{"bash"}})
+	if strings.Contains(without, "mcp__{server}__{tool}") {
+		t.Fatal("MCP instructions should not appear without connect_mcp")
+	}
+	with := builder.Get(Context{EnabledTools: []string{"connect_mcp", "mcp__docs__search"}})
+	for _, want := range []string{"connect_mcp before", "next model round", "mcp__{server}__{tool}"} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("MCP instructions missing %q:\n%s", want, with)
+		}
+	}
+}

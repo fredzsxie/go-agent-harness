@@ -7,11 +7,12 @@ import (
 
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
+	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/workspace"
 )
 
-func newDefaultHooks(nonInteractive *atomic.Bool) *hooks.Manager {
+func newDefaultHooks(nonInteractive *atomic.Bool, mcpManager *mcp.Manager) *hooks.Manager {
 	hookManager := hooks.NewManager()
 	// ----- UserPromptSubmit -----
 	hookManager.OnUserPrompt(func(_ string) {
@@ -20,12 +21,20 @@ func newDefaultHooks(nonInteractive *atomic.Bool) *hooks.Manager {
 
 	// ----- PreToolUse -----
 	hookManager.BeforeTool(func(call hooks.ToolCall) string {
+		interactive := nonInteractive == nil || !nonInteractive.Load()
 		authorize := permission.Authorize
-		if nonInteractive != nil && nonInteractive.Load() {
+		if !interactive {
 			authorize = permission.AuthorizeNonInteractive
 		}
 		if err := authorize(call.Name, call.Input); err != nil {
 			return err.Error()
+		}
+		// MCP annotations 由外部 Server 提供，只有 Host Policy 可以免除人工确认。
+		if strings.HasPrefix(call.Name, "mcp__") && (mcpManager == nil || mcpManager.Policy(call.Name) != mcp.PolicyAllow) {
+			logger.Warn("[MCP] Approval required for %s", call.Name)
+			if err := permission.AuthorizeExternal(call.Name, call.Input, interactive); err != nil {
+				return err.Error()
+			}
 		}
 		return ""
 	})

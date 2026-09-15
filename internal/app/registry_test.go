@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/mcp"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/team"
@@ -56,6 +57,27 @@ func TestCronToolsAreMainAgentOnly(t *testing.T) {
 	for _, name := range []string{"schedule_cron", "list_crons", "cancel_cron"} {
 		if !mainTools[name] {
 			t.Fatalf("main agent is missing %s", name)
+		}
+		if subTools[name] {
+			t.Fatalf("subagent should not expose %s", name)
+		}
+	}
+}
+
+func TestMCPToolsAreMainAgentOnly(t *testing.T) {
+	mainRegistry := newDefaultRegistry()
+	manager := mcp.New(mainRegistry)
+	registerMCPTool(mainRegistry, manager)
+	subRegistry := newSubagentRegistry()
+
+	if _, err := manager.Connect("docs"); err != nil {
+		t.Fatal(err)
+	}
+	mainTools := toolNames(mainRegistry.Specs())
+	subTools := toolNames(subRegistry.Specs())
+	for _, name := range []string{"connect_mcp", "mcp__docs__search", "mcp__docs__get_version"} {
+		if !mainTools[name] {
+			t.Fatalf("main Agent is missing %s", name)
 		}
 		if subTools[name] {
 			t.Fatalf("subagent should not expose %s", name)

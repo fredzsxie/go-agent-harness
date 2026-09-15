@@ -216,6 +216,8 @@ func (m *Manager) discoverLocked(client *Client) ([]discoveredEntry, map[string]
 				output, err := client.CallTool(ctx, rawName, args)
 				if err != nil {
 					logger.Error("[MCP] Call %s/%s failed: %v", client.Name(), rawName, err)
+				} else {
+					logger.Info("[MCP] Called %s/%s", client.Name(), rawName)
 				}
 				return output, err
 			},

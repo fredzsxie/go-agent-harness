@@ -95,6 +95,8 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 	roundsSinceTodo := 0
 	extractionSource := CloneMessages(sessionMessages)
 	for {
+		// connect_mcp 会在工具执行阶段扩展 Registry，下一轮调用前刷新 Prompt 即可看到新能力。
+		systemPrompt = r.context.RefreshPrompt(enabledToolNames(r.registry.Specs()))
 		extractionSource = CloneMessages(sessionMessages)
 		// 后台任务不会主动唤醒 Agent；只在下一次 LLM 调用前收集一次完成结果。
 		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())

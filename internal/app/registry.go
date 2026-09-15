@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/mcp"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/skill"
 	"go-agent-harness/internal/subagent"
@@ -184,6 +185,17 @@ func registerSkillTool(registry *agent.Registry, manager *skill.Manager) {
 			"name": map[string]any{"type": "string", "description": "Skill name"},
 		},
 	}, manager.RunLoad)
+}
+
+func registerMCPTool(registry *agent.Registry, manager *mcp.Manager) {
+	registry.Register(agent.ToolSpec{
+		Name:        "connect_mcp",
+		Description: "Connect to an MCP server and discover its tools.",
+		Required:    []string{"name"},
+		Properties: map[string]any{
+			"name": map[string]any{"type": "string", "enum": manager.Available()},
+		},
+	}, manager.RunConnect)
 }
 
 func registerCompactTool(registry *agent.Registry) {

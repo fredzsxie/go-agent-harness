@@ -16,6 +16,7 @@ import (
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/logger"
+	"go-agent-harness/internal/mcp"
 	llmmodel "go-agent-harness/internal/model"
 	"go-agent-harness/internal/prompt"
 	"go-agent-harness/internal/protocol"
@@ -54,7 +55,9 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 
 	// 先组装基础工具与 Hooks，再按章节能力扩展主 Agent 工具池。
 	registry := newDefaultRegistry()
-	hookManager := newDefaultHooks(nonInteractive)
+	mcpManager := mcp.New(registry)
+	registerMCPTool(registry, mcpManager)
+	hookManager := newDefaultHooks(nonInteractive, mcpManager)
 
 	// TodoWrite 只维护当前 Session 的临时计划。
 	todoManager := todo.NewManager(out)
