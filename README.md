@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s13 Agent Teams**。s01–s13 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s14–s17 暂不实现。
+当前学习进度到 **s14 MCP Tools**。s01–s14 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s15–s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -33,7 +33,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s11 | Background Tasks | 已完成 | `internal/runtime/`, `internal/agent/runner.go` |
 | s12 | Cron Scheduler | 已完成 | `internal/runtime/cron.go`, `internal/app/app.go` |
 | s13 | Agent Teams | 已完成 | `internal/team/`, `internal/worktree/`, `internal/app/app.go` |
-| s14 | MCP Plugin | 仅占位 | `internal/mcp/` |
+| s14 | MCP Tools | 已完成 | `internal/mcp/`, `internal/app/` |
 | s15 | Integrated Harness | 仅预留 | 继续使用 `internal/app/` 作为组合根 |
 | s16 | Workflow Runtime | 仅占位 | `internal/workflow/` |
 | s17 | Goal Loop | 仅占位 | `internal/goal/` |
@@ -258,8 +258,10 @@ messages := []protocol.Message{
 - `schedule_cron`、`list_crons`、`cancel_cron`
 - `spawn_teammate`、`list_teammates`、`send_message`、`request_shutdown`
 - `request_plan`、`review_plan`、`create_worktree`
+- `connect_mcp`，连接课程内置的 Mock MCP Server
+- 连接后动态加入的 `mcp__{server}__{tool}`
 
-所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。
+所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。Registry 在每轮模型调用前生成最新工具列表，因此 `connect_mcp` 发现的工具会从下一轮开始生效。
 
 ### 权限与 Hooks
 
@@ -272,7 +274,7 @@ PreToolUse permission/log hooks
         -> tool_result
 ```
 
-危险命令可以直接拒绝；可能破坏工作区的操作需要用户确认；文件工具还受到 workspace path resolver 的约束。
+危险命令可以直接拒绝；可能破坏工作区的操作需要用户确认；文件工具还受到 workspace path resolver 的约束。MCP 权限只信任 Host Policy，不把 Server 提供的 `readOnlyHint` 或 `destructiveHint` 当作授权；未明确放行的 MCP 工具默认要求确认，非交互 turn 直接拒绝。
 
 ### Todo 与 Subagent
 
@@ -324,6 +326,44 @@ Lead 与 Teammate 工具边界：
 - Teammate 不会获得 `update_task`、Cron、Subagent、Compact 或 Worktree 删除能力。
 - `result` 与 `idle_notification` 分开投递，分别表示工作产出和可再次接单状态。
 
+### MCP Tools
+
+`connect_mcp` 负责连接一个课程内置的进程内 Mock Server，并模拟 MCP 的 `tools/list` 与 `tools/call` 边界。当前提供：
+
+- `docs`：`search`、`get_version`
+- `deploy`：`status`、`trigger`
+
+本章不实现 stdio、HTTP 或 SSE Transport，也不会启动外部 MCP 进程。连接后的调用链如下：
+
+```text
+connect_mcp("docs")
+        -> MCP Manager discovery
+        -> 校验 Schema / 名称 / 冲突
+        -> Registry 注册 mcp__docs__search 等工具
+        -> 下一轮 LLM 获得最新 Tools 与 System Prompt
+        -> PreToolUse Host Policy
+        -> MCPClient.CallTool("search", input)
+        -> tool_result
+```
+
+模型侧名称统一为 `mcp__{server}__{tool}`。Server 和 Tool 名称中不符合 `[a-zA-Z0-9_-]` 的字符会转换为 `_`；规范化后发生冲突或最终名称超过 64 字符时，整个连接失败且不会留下半注册状态。调用缺少参数、包含 Mock Handler 不接受的参数或执行失败时，会返回带 `is_error` 的 `tool_result`，Agent Loop 可以在下一轮修正输入。
+
+默认 Host Policy：
+
+| MCP 工具 | 策略 |
+|---|---|
+| `mcp__docs__search` | allow |
+| `mcp__docs__get_version` | allow |
+| `mcp__deploy__status` | allow |
+| `mcp__deploy__trigger` | confirm |
+| 其他 MCP 工具 | confirm |
+
+可以使用以下请求验证动态发现：
+
+```text
+连接 docs server，搜索 agent hooks，并告诉我当前 documentation API version。
+```
+
 ### 日志
 
 运行日志统一使用 `logger.Debug`、`logger.Info`、`logger.Warn` 和 `logger.Error`。通过 `LOG_MODE` 设置最低输出等级，默认为 `info`；例如 `warn` 只输出 Warn 和 Error，只有 `debug` 会输出 Debug。格式为本地日期时间、Level 和原日志内容，例如：
@@ -373,7 +413,7 @@ go-agent-harness/
     ├── logger/       # 带时间及 Debug/Info/Warn/Error Level 的极简日志
     ├── team/         # s13 Mailbox、Protocol、Plan Gate 与 Teammate Runtime
     ├── worktree/     # s13 Task 绑定的 Git Worktree
-    ├── mcp/          # s14 仅占位
+    ├── mcp/          # s14 MCP discovery、Mock Server、动态工具与 Host Policy
     ├── workflow/     # s16 仅占位
     └── goal/         # s17 仅占位
 ```
@@ -400,8 +440,9 @@ go run .
 ```bash
 GOCACHE=/private/tmp/go-agent-harness-go-cache go test ./...
 GOCACHE=/private/tmp/go-agent-harness-go-cache go vet ./...
+GOCACHE=/private/tmp/go-agent-harness-go-cache go test -race ./...
 ```
 
 ## 下一步
 
-下一课从新版 **s14 MCP Plugin** 开始。s14–s17 继续只保留对应文件或接口，不实现具体运行逻辑。
+下一课是新版 **s15 Integrated Harness**。s15–s17 继续只保留对应文件或接口，不实现具体运行逻辑。

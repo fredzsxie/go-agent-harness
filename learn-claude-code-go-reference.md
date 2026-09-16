@@ -1,6 +1,6 @@
 # learn-claude-code：Go 版代码对照
 
-课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s13 Agent Teams**；s14–s17 只预留 package 文档或接口，不包含运行逻辑。
+课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s14 MCP Tools**；s15–s17 只预留 package 文档或接口，不包含运行逻辑。
 
 ## 已实现章节
 
@@ -19,6 +19,7 @@
 | s11 Background Tasks | `internal/runtime/background.go` | 显式异步执行，结果在后续 turn 注入 |
 | s12 Cron Scheduler | `internal/runtime/cron.go`, `internal/runtime/cron_store.go` | 到期队列、空闲投递、失败恢复和 durable job |
 | s13 Agent Teams | `internal/team/`, `internal/worktree/`, `internal/app/` | 独立上下文、文件邮箱、原子认领、Plan Gate、类型化控制协议与可选 Worktree |
+| s14 MCP Tools | `internal/mcp/`, `internal/app/`, `internal/permission/` | 进程内 discovery/call、动态 Registry、名称冲突检查与 Host Policy |
 
 ## 核心调用关系
 
@@ -43,6 +44,10 @@ Agent Teams 的 `team.Runtime` 为每个 Teammate 维护独立 `messages[]` 和�
 
 Plan Approval 与 Shutdown 使用 `request_id`、类型、参与方和状态共同匹配。Task 可选绑定 Git Worktree；动态 Resolver 让 Bash 和文件工具使用当前 assignment 目录，失效绑定采用 fail-closed。Worktree 删除保留为 Host API，不暴露给模型。
 
+MCP 由 `mcp.Manager` 管理连接和 discovery。`connect_mcp` 成功后，新工具以 `mcp__{server}__{tool}` 注册到主 Agent 的 Registry，下一轮同时刷新 Tools 与 System Prompt；Subagent 和 Teammate 不获得该能力。当前 `docs` 与 `deploy` 是进程内 Mock Server，只模拟 `tools/list` 和 `tools/call`，不实现真实 Transport。
+
+MCP 名称会先规范化，再检查 64 字符限制及与 Built-in/其他 Server 的冲突。只有 Host Policy 能直接放行外部工具；Server annotations 不构成授权。未知或未配置工具默认确认，Cron 与 Team Event 等非交互 turn fail-closed。MCP 输入或 Handler 错误以 `tool_result` 返回，不终止 Agent Loop。
+
 ## 日志与注释
 
 运行日志统一使用：
@@ -60,12 +65,11 @@ Plan Approval 与 Shutdown 使用 `request_id`、类型、参与方和状态共�
 
 | 章节 | 占位位置 | 当前限制 |
 |---|---|---|
-| s14 MCP Plugin | `internal/mcp/` | 不连接 MCP Server，不注册 MCP 工具 |
 | s15 Integrated Harness | `internal/app/` | 不新增独立 package |
 | s16 Workflow Runtime | `internal/workflow/` | 不定义 Step、Checkpoint 或执行器 |
 | s17 Goal Loop | `internal/goal/` | 不实现 Evaluator、自动续轮或 `/goal` |
 
-开始下一章前保持这些占位 package 无副作用：不注册工具、不启动 goroutine、不读写文件、不调用 LLM。
+开始下一章前保持这些占位模块无副作用：不启动 goroutine、不读写文件、不调用 LLM。
 
 ## 验证
 
