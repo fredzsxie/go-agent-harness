@@ -3,6 +3,7 @@ package model
 
 import (
 	"context"
+	"errors"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -31,17 +32,28 @@ func NewAnthropic(cfg config.LLMConfig) *Anthropic {
 
 // Complete 将内部统一请求转换为 Anthropic 请求，并把响应还原为 Agent 消息。
 func (m *Anthropic) Complete(ctx context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+	modelID := request.Model
+	if modelID == "" {
+		modelID = m.model
+	}
 	response, err := m.client.Messages.New(ctx, anthropic.MessageNewParams{
 		MaxTokens: request.MaxTokens,
-		Model:     anthropic.Model(m.model),
+		Model:     anthropic.Model(modelID),
 		Messages:  toAnthropicMessages(request.Messages),
 		Tools:     toAnthropicTools(request.Tools),
 		System:    systemBlocks(request.System),
 	})
 	if err != nil {
+		var apiErr *anthropic.Error
+		if errors.As(err, &apiErr) {
+			return agent.ModelResponse{}, &agent.ModelError{HTTPStatus: apiErr.StatusCode, Err: err}
+		}
 		return agent.ModelResponse{}, err
 	}
-	return agent.ModelResponse{Message: parseAssistantMessage(response.Content)}, nil
+	return agent.ModelResponse{
+		Message:    parseAssistantMessage(response.Content),
+		StopReason: string(response.StopReason),
+	}, nil
 }
 
 func systemBlocks(system string) []anthropic.TextBlockParam {

@@ -98,7 +98,10 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	// Compact 是由 Runner 处理会话状态的控制工具。
 	registerCompactTool(registry)
 
-	runner := agent.NewRunnerWithPromptBuilder(model, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir))
+	runner := agent.NewRunnerWithPromptBuilder(
+		model, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir),
+		agent.WithFallbackModel(cfg.FallbackModel),
+	)
 	return &App{
 		session:        agent.NewSession(runner),
 		cron:           cronManager,

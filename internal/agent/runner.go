@@ -18,15 +18,24 @@ import (
 )
 
 type Runner struct {
-	client     Model
-	worker     *Worker
-	registry   *Registry
-	hooks      *hooks.Manager
-	context    *agentctx.Manager
-	background *agentruntime.BackgroundManager
+	client        Model
+	worker        *Worker
+	registry      *Registry
+	hooks         *hooks.Manager
+	context       *agentctx.Manager
+	background    *agentruntime.BackgroundManager
+	fallbackModel string
+	recovery      recoveryPolicy
 }
 
-func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, systemPrompt string) *Runner {
+type RunnerOption func(*Runner)
+
+// WithFallbackModel 配置主模型持续 overloaded 时使用的备用模型。
+func WithFallbackModel(model string) RunnerOption {
+	return func(r *Runner) { r.fallbackModel = strings.TrimSpace(model) }
+}
+
+func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, systemPrompt string, options ...RunnerOption) *Runner {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
@@ -38,6 +47,10 @@ func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, syst
 		registry: registry,
 		hooks:    hookManager,
 		context:  agentctx.New(nil, systemPrompt),
+		recovery: defaultRecoveryPolicy(),
+	}
+	for _, option := range options {
+		option(runner)
 	}
 	runner.background = newBackgroundManager(registry)
 	runner.worker = NewWorker(runner.client, registry, hookManager)
@@ -45,9 +58,9 @@ func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, syst
 }
 
 // NewRunnerWithPromptBuilder 使用运行时 Prompt 组装器创建 Runner。
-func NewRunnerWithPromptBuilder(model Model, registry *Registry, hookManager *hooks.Manager, builder *prompt.Builder) *Runner {
+func NewRunnerWithPromptBuilder(model Model, registry *Registry, hookManager *hooks.Manager, builder *prompt.Builder, options ...RunnerOption) *Runner {
 	if builder == nil {
-		return NewRunner(model, registry, hookManager, "")
+		return NewRunner(model, registry, hookManager, "", options...)
 	}
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
@@ -57,6 +70,10 @@ func NewRunnerWithPromptBuilder(model Model, registry *Registry, hookManager *ho
 		registry: registry,
 		hooks:    hookManager,
 		context:  agentctx.New(builder, ""),
+		recovery: defaultRecoveryPolicy(),
+	}
+	for _, option := range options {
+		option(runner)
 	}
 	runner.background = newBackgroundManager(registry)
 	runner.worker = NewWorker(runner.client, registry, hookManager)
@@ -92,6 +109,10 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 
 	toolCallCnt := 0
 	reactiveRetries := 0
+	recoveryState := recoveryState{fallbackModel: r.fallbackModel}
+	maxTokens := DefaultMaxTokens
+	hasEscalated := false
+	recoveryCount := 0
 	roundsSinceTodo := 0
 	extractionSource := CloneMessages(sessionMessages)
 	for {
@@ -108,7 +129,7 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 		}
 		sessionMessages = prepared
 
-		turn, err := r.worker.RunTurn(ctx, systemPrompt, sessionMessages, r.interceptTool)
+		turn, err := r.runTurnWithRetry(ctx, &recoveryState, systemPrompt, sessionMessages, maxTokens)
 		logger.Info("[LLM] Main LLM calling done.")
 		if err != nil {
 			// 已产生 assistant 消息说明错误来自工具阶段，不应按模型上下文超限重试。
@@ -130,6 +151,26 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 
 		assistantMessage := turn.Assistant
 		hasToolUse := turn.HasTools
+		if turn.StopReason == "max_tokens" {
+			if !hasEscalated {
+				maxTokens = escalatedMaxTokens
+				hasEscalated = true
+				logger.Warn("[LLM] response truncated, retrying with max_tokens=%d", maxTokens)
+				continue
+			}
+
+			// 扩容后仍被截断时保留已生成内容，再请求模型从断点继续。
+			sessionMessages = append(sessionMessages, assistantMessage)
+			if recoveryCount < maxRecoveryRetries {
+				sessionMessages = append(sessionMessages, protocol.Message{Role: protocol.RoleUser, Content: continuationPrompt})
+				recoveryCount++
+				logger.Warn("[LLM] continuing truncated response, recovery %d/%d", recoveryCount, maxRecoveryRetries)
+				continue
+			}
+			return RunResult{Messages: sessionMessages, Output: responseText(assistantMessage)}, nil
+		}
+		maxTokens = DefaultMaxTokens
+		hasEscalated = false
 
 		sessionMessages = append(sessionMessages, assistantMessage)
 

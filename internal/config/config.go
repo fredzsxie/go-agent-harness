@@ -9,9 +9,10 @@ import (
 )
 
 type LLMConfig struct {
-	BaseURL string
-	APIKey  string
-	Model   string
+	BaseURL       string
+	APIKey        string
+	Model         string
+	FallbackModel string
 }
 
 const (
@@ -21,9 +22,10 @@ const (
 
 func LoadLLMConfig() (LLMConfig, error) {
 	cfg := LLMConfig{
-		BaseURL: strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")),
-		APIKey:  strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
-		Model:   strings.TrimSpace(os.Getenv("MODEL_ID")),
+		BaseURL:       strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")),
+		APIKey:        strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
+		Model:         strings.TrimSpace(os.Getenv("MODEL_ID")),
+		FallbackModel: strings.TrimSpace(os.Getenv("FALLBACK_MODEL_ID")),
 	}
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = DefaultBaseURL

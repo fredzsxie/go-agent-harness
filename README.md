@@ -326,6 +326,9 @@ Lead 与 Teammate 工具边界：
 - Teammate 不会获得 `update_task`、Cron、Subagent、Compact 或 Worktree 删除能力。
 - `result` 与 `idle_notification` 分开投递，分别表示工作产出和可再次接单状态。
 
+测试用例：
+请为一次只读的 Agent Teams 验证提出一个两人团队方案：alice 计算17*19，bob 计算5的阶乘。不要修改任何文件，先只给出方案并等待我确认。
+
 ### MCP Tools
 
 `connect_mcp` 负责连接一个课程内置的进程内 Mock Server，并模拟 MCP 的 `tools/list` 与 `tools/call` 边界。当前提供：

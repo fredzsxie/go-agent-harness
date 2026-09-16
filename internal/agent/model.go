@@ -20,12 +20,23 @@ type ModelRequest struct {
 	Messages  []protocol.Message
 	Tools     []ToolSpec
 	MaxTokens int64
+	Model     string
 }
 
-// ModelResponse 只保留 Agent Loop 推进消息所需的响应内容。
+// ModelResponse 保留 Agent Loop 推进消息和判断截断恢复所需的响应内容。
 type ModelResponse struct {
-	Message protocol.Message
+	Message    protocol.Message
+	StopReason string
 }
+
+// ModelError 在不泄露具体 SDK 类型的前提下传递 HTTP 错误状态。
+type ModelError struct {
+	HTTPStatus int
+	Err        error
+}
+
+func (e *ModelError) Error() string { return e.Err.Error() }
+func (e *ModelError) Unwrap() error { return e.Err }
 
 type RunResult struct {
 	Messages []protocol.Message

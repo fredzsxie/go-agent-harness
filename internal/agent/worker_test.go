@@ -64,3 +64,32 @@ func TestToolInterceptorCanReplaceHistoryAndStopBatch(t *testing.T) {
 		t.Fatalf("unexpected batch: %#v", batch)
 	}
 }
+
+func TestWorkerDefersToolExecutionWhenResponseIsTruncated(t *testing.T) {
+	model := &fakeModel{response: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
+		Type: protocol.BlockToolUse, ToolUseID: "toolu_partial", ToolName: "echo", Input: map[string]any{"text": "partial"},
+	}}}}
+	registry := NewRegistry()
+	executed := false
+	registry.Register(ToolSpec{Name: "echo"}, func(_ context.Context, _ any) (string, error) {
+		executed = true
+		return "unexpected", nil
+	})
+
+	modelWithStop := &responseModel{response: ModelResponse{Message: model.response, StopReason: "max_tokens"}}
+	turn, err := NewWorker(modelWithStop, registry, nil).RunTurn(context.Background(), "system", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !turn.HasTools || turn.StopReason != "max_tokens" || executed {
+		t.Fatalf("truncated tool call should be deferred: turn=%#v executed=%v", turn, executed)
+	}
+}
+
+type responseModel struct {
+	response ModelResponse
+}
+
+func (m *responseModel) Complete(context.Context, ModelRequest) (ModelResponse, error) {
+	return m.response, nil
+}
