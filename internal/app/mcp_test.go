@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/mcp"
+	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -20,13 +20,12 @@ func TestMCPHostPolicyAllowsKnownReadOnlyAndFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nonInteractive := &atomic.Bool{}
-	nonInteractive.Store(true)
-	hookManager := newDefaultHooks(nonInteractive, manager)
-	if blocked := hookManager.TriggerPreToolUse(hooks.ToolCall{Name: "mcp__deploy__status"}); blocked != "" {
+	hookManager := newDefaultHooks(manager)
+	ctx := permission.WithInteractive(context.Background(), false)
+	if blocked := hookManager.TriggerPreToolUse(ctx, hooks.ToolCall{Name: "mcp__deploy__status"}); blocked != "" {
 		t.Fatalf("Host allow policy should permit status: %s", blocked)
 	}
-	blocked := hookManager.TriggerPreToolUse(hooks.ToolCall{Name: "mcp__deploy__trigger"})
+	blocked := hookManager.TriggerPreToolUse(ctx, hooks.ToolCall{Name: "mcp__deploy__trigger"})
 	if !strings.Contains(blocked, "non-interactive turns cannot request") {
 		t.Fatalf("untrusted MCP tool should fail closed: %q", blocked)
 	}
@@ -62,7 +61,7 @@ func TestMCPToolAppearsAndRunsOnNextWorkerRound(t *testing.T) {
 	manager := mcp.New(registry)
 	registerMCPTool(registry, manager)
 	model := &mcpSequenceModel{t: t}
-	worker := agent.NewWorker(model, registry, newDefaultHooks(nil, manager))
+	worker := agent.NewWorker(model, registry, newDefaultHooks(manager))
 
 	first, err := worker.RunTurn(context.Background(), "system", nil, nil)
 	if err != nil || len(first.Tools.Results) != 1 || first.Tools.Results[0].IsError {

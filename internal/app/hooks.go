@@ -1,9 +1,9 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
@@ -12,7 +12,7 @@ import (
 	"go-agent-harness/internal/workspace"
 )
 
-func newDefaultHooks(nonInteractive *atomic.Bool, mcpManager *mcp.Manager) *hooks.Manager {
+func newDefaultHooks(mcpManager *mcp.Manager) *hooks.Manager {
 	hookManager := hooks.NewManager()
 	// ----- UserPromptSubmit -----
 	hookManager.OnUserPrompt(func(_ string) {
@@ -20,13 +20,14 @@ func newDefaultHooks(nonInteractive *atomic.Bool, mcpManager *mcp.Manager) *hook
 	})
 
 	// ----- PreToolUse -----
-	hookManager.BeforeTool(func(call hooks.ToolCall) string {
-		interactive := nonInteractive == nil || !nonInteractive.Load()
+	hookManager.BeforeTool(func(ctx context.Context, call hooks.ToolCall) string {
+		interactive := permission.IsInteractive(ctx)
 		authorize := permission.Authorize
 		if !interactive {
 			authorize = permission.AuthorizeNonInteractive
 		}
 		if err := authorize(call.Name, call.Input); err != nil {
+			logger.Warn("[Permission] denied %s: %v", call.Name, err)
 			return err.Error()
 		}
 		// MCP annotations 由外部 Server 提供，只有 Host Policy 可以免除人工确认。
@@ -38,7 +39,7 @@ func newDefaultHooks(nonInteractive *atomic.Bool, mcpManager *mcp.Manager) *hook
 		}
 		return ""
 	})
-	hookManager.BeforeTool(func(call hooks.ToolCall) string {
+	hookManager.BeforeTool(func(_ context.Context, call hooks.ToolCall) string {
 		logger.Info("[HOOK] %s(%s)", call.Name, previewInput(call.Input))
 		return ""
 	})

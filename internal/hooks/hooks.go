@@ -1,7 +1,9 @@
 package hooks
 
+import "context"
+
 type UserPromptSubmitHook func(query string)
-type PreToolUseHook func(call ToolCall) string
+type PreToolUseHook func(ctx context.Context, call ToolCall) string
 type PostToolUseHook func(call ToolCall, output string)
 type StopHook func(ctx StopContext) string
 
@@ -53,9 +55,9 @@ func (m *Manager) TriggerUserPromptSubmit(query string) {
 	}
 }
 
-func (m *Manager) TriggerPreToolUse(call ToolCall) string {
+func (m *Manager) TriggerPreToolUse(ctx context.Context, call ToolCall) string {
 	for _, hook := range m.preToolUse {
-		if blocked := hook(call); blocked != "" {
+		if blocked := hook(ctx, call); blocked != "" {
 			return blocked
 		}
 	}

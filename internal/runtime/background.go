@@ -16,10 +16,11 @@ const commandTimeout = 120 * time.Second
 type Executor func(context.Context, string) (string, error)
 
 type task struct {
-	id      string
-	command string
-	status  string
-	result  string
+	id       string
+	command  string
+	status   string
+	result   string
+	complete func(string)
 }
 
 type BackgroundManager struct {
@@ -32,6 +33,7 @@ type BackgroundManager struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	closed  bool
+	readyCh chan struct{}
 }
 
 // NewBackground 创建可跨多次 LLM 调用存活的后台任务管理器。
@@ -44,6 +46,7 @@ func NewBackground(execute Executor) *BackgroundManager {
 		execute: execute,
 		ctx:     ctx,
 		cancel:  cancel,
+		readyCh: make(chan struct{}, 1),
 	}
 }
 
@@ -54,7 +57,7 @@ func ShouldRunBackground(toolName string, input map[string]any) bool {
 }
 
 // Start 校验并登记命令，然后立即返回任务 ID，不等待命令执行完成。
-func (m *BackgroundManager) Start(command string) (string, error) {
+func (m *BackgroundManager) Start(command string, onComplete ...func(string)) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", fmt.Errorf("bash command cannot be empty")
@@ -70,7 +73,11 @@ func (m *BackgroundManager) Start(command string) (string, error) {
 	}
 	m.nextID++
 	id := fmt.Sprintf("bg_%04d", m.nextID)
-	m.tasks[id] = &task{id: id, command: command, status: "running"}
+	var complete func(string)
+	if len(onComplete) > 0 {
+		complete = onComplete[0]
+	}
+	m.tasks[id] = &task{id: id, command: command, status: "running", complete: complete}
 	m.wg.Add(1)
 	m.mu.Unlock()
 
@@ -100,6 +107,9 @@ func (m *BackgroundManager) run(id, command string) {
 	} else if strings.TrimSpace(result) == "" {
 		result = "(no output)"
 	}
+	if current := m.task(id); current != nil && current.complete != nil {
+		current.complete(result)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -111,6 +121,33 @@ func (m *BackgroundManager) run(id, command string) {
 	current.result = result
 	// 只把 ID 放入完成队列；Collect 负责一次性读取并删除完整任务状态。
 	m.ready = append(m.ready, id)
+	select {
+	case m.readyCh <- struct{}{}:
+	default:
+	}
+	if status == "failed" {
+		logger.Error("[Background] finished %s: %s", id, status)
+	} else {
+		logger.Info("[Background] finished %s: %s", id, status)
+	}
+}
+
+func (m *BackgroundManager) task(id string) *task {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tasks[id]
+}
+
+// Ready 在至少一个后台任务完成时通知运行时；多个结果可合并为一次唤醒。
+func (m *BackgroundManager) Ready() <-chan struct{} {
+	return m.readyCh
+}
+
+// HasReady 用于消除结果已被正在运行的 Agent 收集后留下的过期通知。
+func (m *BackgroundManager) HasReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.ready) > 0
 }
 
 // Collect 一次性取走已完成任务，并转换成不复用原 tool_use_id 的独立通知文本。

@@ -94,6 +94,16 @@ func (r *Runner) Close() {
 	}
 }
 
+// BackgroundReady 向 App 暴露后台任务完成信号。
+func (r *Runner) BackgroundReady() <-chan struct{} {
+	return r.background.Ready()
+}
+
+// HasBackgroundResults 判断是否仍有未注入会话的后台结果。
+func (r *Runner) HasBackgroundResults() bool {
+	return r.background.HasReady()
+}
+
 func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	sessionMessages := CloneMessages(messages)
 
@@ -271,11 +281,16 @@ func (r *Runner) interceptTool(ctx context.Context, sessionMessages []protocol.M
 	if agentruntime.ShouldRunBackground(call.Name, call.Input) {
 		// PreToolUse 已通过后才异步启动，并立即用占位结果结束本次 tool_use。
 		command, _ := call.Input["command"].(string)
-		id, err := r.background.Start(command)
+		id, err := r.background.Start(command, func(output string) {
+			r.hooks.TriggerPostToolUse(call, output)
+		})
 		if err != nil {
 			return ToolOutcome{Text: "Error: " + err.Error(), IsError: true}, true, nil
 		}
-		return ToolOutcome{Text: fmt.Sprintf("[Background task %s started] The result will be collected on a later turn.", id)}, true, nil
+		return ToolOutcome{
+			Text:     fmt.Sprintf("[Background task %s started] The result will be collected on a later turn.", id),
+			SkipPost: true,
+		}, true, nil
 	}
 	return ToolOutcome{}, false, nil
 }

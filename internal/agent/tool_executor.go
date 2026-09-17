@@ -14,6 +14,7 @@ type ToolOutcome struct {
 	IsError  bool
 	Stop     bool
 	Messages []protocol.Message
+	SkipPost bool
 }
 
 // ToolInterceptor 在 Registry 分发前处理需要运行时状态的特殊工具。
@@ -54,7 +55,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, messages []protocol.Message,
 		}
 
 		outcome := ToolOutcome{}
-		if blocked := e.hooks.TriggerPreToolUse(call); blocked != "" {
+		if blocked := e.hooks.TriggerPreToolUse(ctx, call); blocked != "" {
 			outcome.Text = blocked
 			outcome.IsError = true
 		} else {
@@ -74,7 +75,9 @@ func (e *ToolExecutor) Execute(ctx context.Context, messages []protocol.Message,
 					outcome.IsError = true
 				}
 			}
-			e.hooks.TriggerPostToolUse(call, outcome.Text)
+			if !outcome.SkipPost {
+				e.hooks.TriggerPostToolUse(call, outcome.Text)
+			}
 		}
 
 		batch.Results = append(batch.Results, protocol.ContentBlock{

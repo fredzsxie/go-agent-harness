@@ -53,7 +53,7 @@ func registerTeammateTools(registry *agent.Registry, peer *teammate) {
 
 func (r *Runtime) hooksFor(peer *teammate) *hooks.Manager {
 	manager := hooks.NewManager()
-	manager.BeforeTool(func(call hooks.ToolCall) string {
+	manager.BeforeTool(func(_ context.Context, call hooks.ToolCall) string {
 		if isMutatingTool(call.Name) {
 			r.mu.Lock()
 			gate := peer.gate

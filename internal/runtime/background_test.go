@@ -64,6 +64,43 @@ func TestManagerReportsFailureAndEscapesNotification(t *testing.T) {
 	}
 }
 
+func TestManagerSignalsCompletedTask(t *testing.T) {
+	release := make(chan struct{})
+	completed := make(chan string, 1)
+	manager := NewBackground(func(context.Context, string) (string, error) {
+		<-release
+		return "done", nil
+	})
+	defer manager.Close()
+	if _, err := manager.Start("work", func(result string) { completed <- result }); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+
+	select {
+	case <-manager.Ready():
+	case <-time.After(time.Second):
+		t.Fatal("background completion did not signal readiness")
+	}
+	select {
+	case result := <-completed:
+		if result != "done" {
+			t.Fatalf("unexpected completion hook result: %q", result)
+		}
+	default:
+		t.Fatal("completion hook should run before readiness is signaled")
+	}
+	if !manager.HasReady() {
+		t.Fatal("completed result should remain ready until collected")
+	}
+	if notifications := manager.Collect(); len(notifications) != 1 {
+		t.Fatalf("unexpected notifications: %#v", notifications)
+	}
+	if manager.HasReady() {
+		t.Fatal("collected result should no longer be ready")
+	}
+}
+
 func waitForNotification(t *testing.T, manager *BackgroundManager) string {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

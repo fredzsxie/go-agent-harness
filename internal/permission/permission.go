@@ -4,12 +4,26 @@ package permission
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
 	"go-agent-harness/internal/workspace"
 )
+
+type interactionKey struct{}
+
+// WithInteractive 把当前 Agent turn 是否可以请求终端审批绑定到 Context。
+func WithInteractive(ctx context.Context, interactive bool) context.Context {
+	return context.WithValue(ctx, interactionKey{}, interactive)
+}
+
+// IsInteractive 默认将用户主动请求视为交互式，自动回合需显式关闭。
+func IsInteractive(ctx context.Context) bool {
+	interactive, configured := ctx.Value(interactionKey{}).(bool)
+	return !configured || interactive
+}
 
 /*
 Three gates inserted before tool execution:
@@ -140,10 +154,21 @@ func AuthorizeExternal(toolName string, args map[string]any, interactive bool) e
 
 func authorize(toolName string, args map[string]any, interactive bool) error {
 	if toolName == "bash" {
-		command, _ := args["command"].(string)
+		command, ok := args["command"].(string)
+		if !ok || strings.TrimSpace(command) == "" {
+			return fmt.Errorf("permission denied: shell command must be a non-empty string")
+		}
 		if reason := CheckDenyList(command); reason != "" {
 			return fmt.Errorf("%s", reason)
 		}
+		const reason = "Shell command requires approval"
+		if !interactive {
+			return fmt.Errorf("permission denied: asynchronous turns cannot request shell approval")
+		}
+		if AskUser(toolName, args, reason) == "deny" {
+			return fmt.Errorf("permission denied: %s", reason)
+		}
+		return nil
 	}
 
 	if reason := CheckRules(toolName, args); reason != "" {

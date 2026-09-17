@@ -5,20 +5,23 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/protocol"
 	"go-agent-harness/internal/team"
 )
 
 type recordingSession struct {
-	mu       sync.Mutex
-	attempts int
-	inputs   []protocol.Message
-	busyOnce bool
+	mu          sync.Mutex
+	attempts    int
+	inputs      []protocol.Message
+	busyOnce    bool
+	interactive bool
+	ready       chan struct{}
+	background  bool
 }
 
 type lockedBuffer struct {
@@ -45,7 +48,7 @@ func (s *recordingSession) Submit(_ context.Context, inputs ...protocol.Message)
 	return agent.RunResult{}, nil
 }
 
-func (s *recordingSession) TrySubmit(_ context.Context, before, after func(), inputs ...protocol.Message) (agent.RunResult, bool, error) {
+func (s *recordingSession) TrySubmit(ctx context.Context, inputs ...protocol.Message) (agent.RunResult, bool, error) {
 	s.mu.Lock()
 	s.attempts++
 	busy := s.busyOnce && s.attempts == 1
@@ -53,32 +56,33 @@ func (s *recordingSession) TrySubmit(_ context.Context, before, after func(), in
 	if busy {
 		return agent.RunResult{}, false, nil
 	}
-	if before != nil {
-		before()
-	}
-	if after != nil {
-		defer after()
-	}
 	s.mu.Lock()
 	s.inputs = append(s.inputs, inputs...)
+	s.interactive = permission.IsInteractive(ctx)
+	s.background = false
 	s.mu.Unlock()
 	return agent.RunResult{Output: "team event handled"}, true, nil
 }
 
-func (s *recordingSession) Close() {}
+func (s *recordingSession) Close()                           {}
+func (s *recordingSession) BackgroundReady() <-chan struct{} { return s.ready }
+func (s *recordingSession) HasBackgroundResults() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.background
+}
 
 func TestTeamEventsRetryBusySessionAndStartLeadTurn(t *testing.T) {
 	root := t.TempDir()
 	bus := team.NewBus(team.BusConfig{WorkDir: root})
 	runtime := team.NewRuntime(team.RuntimeConfig{Bus: bus, Requests: team.NewRequests()})
 	session := &recordingSession{busyOnce: true}
-	mode := &atomic.Bool{}
 	output := &lockedBuffer{}
-	application := &App{session: session, team: runtime, nonInteractive: mode, out: output}
+	application := &App{session: session, team: runtime, out: output}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stop := application.startTeamEventRuntime(ctx)
+	stop := application.startAsyncRuntime(ctx)
 	defer stop()
 	if _, err := bus.Send("alice", "lead", "implementation done", team.MessageResult, team.Metadata{}); err != nil {
 		t.Fatal(err)
@@ -92,6 +96,7 @@ func TestTeamEventsRetryBusySessionAndStartLeadTurn(t *testing.T) {
 	session.mu.Lock()
 	attempts := session.attempts
 	input := session.inputs[0]
+	interactive := session.interactive
 	session.mu.Unlock()
 	if attempts < 2 {
 		t.Fatalf("busy Session should be retried, attempts=%d", attempts)
@@ -99,11 +104,36 @@ func TestTeamEventsRetryBusySessionAndStartLeadTurn(t *testing.T) {
 	if input.Role != protocol.RoleUser || !strings.Contains(input.Content, "[result] alice: implementation done") {
 		t.Fatalf("unexpected Team event input: %#v", input)
 	}
-	if mode.Load() {
-		t.Fatal("non-interactive mode should be restored after delivery")
+	if interactive {
+		t.Fatal("automatic Team turn should use non-interactive permission context")
 	}
 	if !strings.Contains(output.String(), "team event handled") {
 		t.Fatalf("Lead output was not printed: %q", output.String())
+	}
+}
+
+func TestBackgroundCompletionStartsAutomaticTurn(t *testing.T) {
+	ready := make(chan struct{}, 1)
+	session := &recordingSession{ready: ready, background: true}
+	output := &lockedBuffer{}
+	application := &App{session: session, out: output}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := application.startAsyncRuntime(ctx)
+	defer stop()
+
+	ready <- struct{}{}
+	waitUntil(t, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return session.attempts == 1
+	})
+	session.mu.Lock()
+	interactive := session.interactive
+	inputs := len(session.inputs)
+	session.mu.Unlock()
+	if interactive || inputs != 0 {
+		t.Fatalf("background wake should be non-interactive without synthetic input: interactive=%v inputs=%d", interactive, inputs)
 	}
 }
 

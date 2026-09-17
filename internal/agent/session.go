@@ -13,6 +13,11 @@ type sessionRunner interface {
 	Close()
 }
 
+type backgroundEvents interface {
+	BackgroundReady() <-chan struct{}
+	HasBackgroundResults() bool
+}
+
 // Session 持有单个 Agent 的消息历史，并串行执行用户与 Cron 输入。
 type Session struct {
 	mu       sync.Mutex
@@ -35,20 +40,30 @@ func (s *Session) Submit(ctx context.Context, inputs ...protocol.Message) (RunRe
 	return s.run(ctx, inputs)
 }
 
-// TrySubmit 供 Cron 非阻塞投递；false 表示 Session 当前仍在处理其他输入。
-func (s *Session) TrySubmit(ctx context.Context, before, after func(), inputs ...protocol.Message) (RunResult, bool, error) {
+// TrySubmit 供自动事件非阻塞投递；false 表示 Session 当前仍在处理其他输入。
+func (s *Session) TrySubmit(ctx context.Context, inputs ...protocol.Message) (RunResult, bool, error) {
 	if !s.mu.TryLock() {
 		return RunResult{}, false, nil
 	}
 	defer s.mu.Unlock()
-	if before != nil {
-		before()
-	}
-	if after != nil {
-		defer after()
-	}
 	result, err := s.run(ctx, inputs)
 	return result, true, err
+}
+
+// BackgroundReady 转发 Runner 的后台完成信号。
+func (s *Session) BackgroundReady() <-chan struct{} {
+	if source, ok := s.runner.(backgroundEvents); ok {
+		return source.BackgroundReady()
+	}
+	return nil
+}
+
+// HasBackgroundResults 转发 Runner 的待投递状态。
+func (s *Session) HasBackgroundResults() bool {
+	if source, ok := s.runner.(backgroundEvents); ok {
+		return source.HasBackgroundResults()
+	}
+	return false
 }
 
 func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult, error) {

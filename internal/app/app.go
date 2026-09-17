@@ -7,9 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/chzyer/readline"
 
@@ -30,17 +27,18 @@ import (
 )
 
 type App struct {
-	session        appSession
-	cron           *agentruntime.CronScheduler
-	team           *team.Runtime
-	nonInteractive *atomic.Bool
-	in             io.Reader
-	out            io.Writer
+	session appSession
+	cron    *agentruntime.CronScheduler
+	team    *team.Runtime
+	in      io.Reader
+	out     io.Writer
 }
 
 type appSession interface {
 	Submit(context.Context, ...protocol.Message) (agent.RunResult, error)
-	TrySubmit(context.Context, func(), func(), ...protocol.Message) (agent.RunResult, bool, error)
+	TrySubmit(context.Context, ...protocol.Message) (agent.RunResult, bool, error)
+	BackgroundReady() <-chan struct{}
+	HasBackgroundResults() bool
 	Close()
 }
 
@@ -50,14 +48,13 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	if err != nil {
 		workDir = "."
 	}
-	nonInteractive := &atomic.Bool{}
 	model := llmmodel.NewAnthropic(cfg)
 
 	// 先组装基础工具与 Hooks，再按章节能力扩展主 Agent 工具池。
 	registry := newDefaultRegistry()
 	mcpManager := mcp.New(registry)
 	registerMCPTool(registry, mcpManager)
-	hookManager := newDefaultHooks(nonInteractive, mcpManager)
+	hookManager := newDefaultHooks(mcpManager)
 
 	// TodoWrite 只维护当前 Session 的临时计划。
 	todoManager := todo.NewManager(out)
@@ -103,12 +100,11 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 		agent.WithFallbackModel(cfg.FallbackModel),
 	)
 	return &App{
-		session:        agent.NewSession(runner),
-		cron:           cronManager,
-		team:           teamRuntime,
-		nonInteractive: nonInteractive,
-		in:             in,
-		out:            out,
+		session: agent.NewSession(runner),
+		cron:    cronManager,
+		team:    teamRuntime,
+		in:      in,
+		out:     out,
 	}
 }
 
@@ -118,10 +114,8 @@ func (a *App) Run(ctx context.Context) error {
 	if a.team != nil {
 		defer a.team.Close()
 	}
-	stopCron := a.startCronRuntime(ctx)
-	defer stopCron()
-	stopTeam := a.startTeamEventRuntime(ctx)
-	defer stopTeam()
+	stopAsync := a.startAsyncRuntime(ctx)
+	defer stopAsync()
 
 	fmt.Fprintln(a.out, "go-agent-harness")
 	fmt.Fprintln(a.out, "Type a task, or type q/exit to quit.")
@@ -130,76 +124,6 @@ func (a *App) Run(ctx context.Context) error {
 		return a.runInteractive(ctx, stdin, stdout)
 	}
 	return a.runScanner(ctx)
-}
-
-// startTeamEventRuntime 等待 Lead 邮箱，并在 Session 空闲后启动事件驱动的新 turn。
-func (a *App) startTeamEventRuntime(parent context.Context) func() {
-	if a.team == nil {
-		return func() {}
-	}
-	ctx, cancel := context.WithCancel(parent)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var pending []team.Message
-		for {
-			if len(pending) == 0 {
-				messages, err := a.team.WaitLeadEvents(ctx, time.Second)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					logger.Error("[TeamRuntime] Lead inbox: %v", err)
-					continue
-				}
-				pending = messages
-				if len(pending) == 0 {
-					continue
-				}
-			}
-
-			if a.deliverTeamEvents(ctx, pending) {
-				pending = nil
-				continue
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(250 * time.Millisecond):
-			}
-		}
-	}()
-	return func() {
-		cancel()
-		wg.Wait()
-	}
-}
-
-// deliverTeamEvents 使用非阻塞 Session 入口；忙碌或失败时由上层保留原事件重试。
-func (a *App) deliverTeamEvents(ctx context.Context, messages []team.Message) bool {
-	content := team.FormatEvents(messages)
-	if content == "" {
-		return true
-	}
-	result, acquired, err := a.session.TrySubmit(ctx,
-		func() { a.nonInteractive.Store(true) },
-		func() { a.nonInteractive.Store(false) },
-		protocol.Message{Role: protocol.RoleUser, Content: content},
-	)
-	if !acquired {
-		logger.Debug("[TeamRuntime] Lead busy, retry %d event(s) later", len(messages))
-		return false
-	}
-	if err != nil {
-		logger.Error("[TeamRuntime] Event delivery failed: %v", err)
-		return false
-	}
-	logger.Info("[TeamRuntime] Delivered %d event(s) to Lead", len(messages))
-	if result.Output != "" {
-		fmt.Fprintln(a.out, result.Output)
-	}
-	return true
 }
 
 // runInteractive 对真实终端使用 readline，保证光标、退格和宽字符显示正确。
@@ -283,84 +207,6 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 		fmt.Fprintln(a.out, result.Output)
 	}
 	return false, nil
-}
-
-// startCronRuntime 分离“检查到期时间”和“等待 Agent 空闲后投递”两个循环。
-func (a *App) startCronRuntime(parent context.Context) func() {
-	if err := a.cron.Load(); err != nil {
-		logger.Error("[cron] %v", err)
-	}
-	ctx, cancel := context.WithCancel(parent)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case moment := <-ticker.C:
-				a.cron.Poll(moment)
-			}
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(time.Second) // 如果Agent忙碌中，会尝试多次
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if a.cron.HasPending() {
-					a.runScheduledTurn(ctx)
-				}
-			}
-		}
-	}()
-	return func() {
-		cancel()
-		wg.Wait()
-	}
-}
-
-// runScheduledTurn 尝试向空闲 Session 投递到期提示；失败时恢复队列以保证至少投递一次。
-func (a *App) runScheduledTurn(ctx context.Context) {
-	jobs := a.cron.Consume()
-	if len(jobs) == 0 {
-		return
-	}
-	inputs := make([]protocol.Message, 0, len(jobs))
-	for _, job := range jobs {
-		inputs = append(inputs, protocol.Message{Role: protocol.RoleUser, Content: "[Scheduled] " + job.Prompt})
-		logger.Info("[cron] delivered %s: %s", job.ID, previewText(job.Prompt, 60))
-	}
-
-	// 权限模式只在成功占用 Session 后切换，避免影响正在执行的用户 turn。
-	result, acquired, err := a.session.TrySubmit(ctx,
-		func() { a.nonInteractive.Store(true) },
-		func() { a.nonInteractive.Store(false) },
-		inputs...,
-	)
-	if !acquired {
-		a.cron.Restore(jobs)
-		logger.Warn("[cron] agent busy, retry later")
-		return
-	}
-	if err != nil {
-		a.cron.Restore(jobs)
-		logger.Error("[cron] delivery failed: %v", err)
-		return
-	}
-	if err := a.cron.Acknowledge(jobs); err != nil {
-		logger.Error("[cron] acknowledgement failed: %v", err)
-	}
-	if result.Output != "" {
-		fmt.Fprintln(a.out, result.Output)
-	}
 }
 
 func previewText(value string, limit int) string {
