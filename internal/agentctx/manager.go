@@ -35,8 +35,8 @@ func New(builder *prompt.Builder, legacyPrompt string) *Manager {
 	}
 }
 
-// StartRequest 在一次用户请求开始时召回 Memory，并生成本次请求的初始 System Prompt。
-func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message, toolNames []string, selector memory.Selector) (string, error) {
+// StartRequest 在一次用户请求开始时召回 Memory，并生成初始 System Prompt。
+func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message, toolNames []string, live prompt.LiveContext, selector memory.Selector) (string, error) {
 	relevant, err := m.memory.LoadRelevant(ctx, messages, selector)
 	if err != nil {
 		return "", err
@@ -50,15 +50,15 @@ func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message,
 		return prompt.Build(m.legacyPrompt, section, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn."), nil
 	}
 	m.memorySection = section
-	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: section}), nil
+	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: section, Live: live}), nil
 }
 
-// RefreshPrompt 复用已召回的 Memory，并刷新动态工具。
-func (m *Manager) RefreshPrompt(toolNames []string) string {
+// RefreshPrompt 复用已召回的 Memory，并刷新工具与实时运行状态。
+func (m *Manager) RefreshPrompt(toolNames []string, live prompt.LiveContext) string {
 	if m.promptBuilder == nil {
 		return prompt.Build(m.legacyPrompt, m.memorySection, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn.")
 	}
-	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: m.memorySection})
+	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: m.memorySection, Live: live})
 }
 
 func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, activeRequest string, summarize compact.Summarizer) ([]protocol.Message, error) {

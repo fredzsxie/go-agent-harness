@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/agentctx"
 	"go-agent-harness/internal/hooks"
@@ -26,6 +27,7 @@ type Runner struct {
 	background    *agentruntime.BackgroundManager
 	fallbackModel string
 	recovery      recoveryPolicy
+	liveContext   func() prompt.LiveContext
 }
 
 type RunnerOption func(*Runner)
@@ -33,6 +35,11 @@ type RunnerOption func(*Runner)
 // WithFallbackModel 配置主模型持续 overloaded 时使用的备用模型。
 func WithFallbackModel(model string) RunnerOption {
 	return func(r *Runner) { r.fallbackModel = strings.TrimSpace(model) }
+}
+
+// WithLiveContext 注入每轮模型调用前读取的实时运行状态。
+func WithLiveContext(provider func() prompt.LiveContext) RunnerOption {
+	return func(r *Runner) { r.liveContext = provider }
 }
 
 func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, systemPrompt string, options ...RunnerOption) *Runner {
@@ -116,7 +123,7 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 	}
 
 	// 每轮会话开始时，根据session调用LLM获取与会话可能相关的memory内容
-	systemPrompt, err := r.context.StartRequest(ctx, sessionMessages, enabledToolNames(r.registry.Specs()), r.selectRelevantMemories)
+	systemPrompt, err := r.context.StartRequest(ctx, sessionMessages, enabledToolNames(r.registry.Specs()), r.currentLiveContext(), r.selectRelevantMemories)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -130,8 +137,8 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 	roundsSinceTodo := 0
 	extractionSource := CloneMessages(sessionMessages)
 	for {
-		// connect_mcp 会在工具执行阶段扩展 Registry，下一轮调用前刷新 Prompt 即可看到新能力。
-		systemPrompt = r.context.RefreshPrompt(enabledToolNames(r.registry.Specs()))
+		// 每轮刷新工具、MCP、Teammate 和时间等实时 Prompt 上下文。
+		systemPrompt = r.context.RefreshPrompt(enabledToolNames(r.registry.Specs()), r.currentLiveContext())
 		extractionSource = CloneMessages(sessionMessages)
 		// 自动运行时会唤醒 Agent，结果仍在此统一注入消息历史。
 		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())
@@ -299,6 +306,17 @@ func (r *Runner) interceptTool(ctx context.Context, sessionMessages []protocol.M
 		}, true, nil
 	}
 	return ToolOutcome{}, false, nil
+}
+
+func (r *Runner) currentLiveContext() prompt.LiveContext {
+	live := prompt.LiveContext{}
+	if r.liveContext != nil {
+		live = r.liveContext()
+	}
+	if strings.TrimSpace(live.CurrentTime) == "" {
+		live.CurrentTime = time.Now().Format(time.RFC3339)
+	}
+	return live
 }
 
 func injectBackgroundResults(messages []protocol.Message, notifications []string) []protocol.Message {

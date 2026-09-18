@@ -98,6 +98,17 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	runner := agent.NewRunnerWithPromptBuilder(
 		model, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir),
 		agent.WithFallbackModel(cfg.FallbackModel),
+		agent.WithLiveContext(func() prompt.LiveContext {
+			teammates := teamRuntime.List()
+			names := make([]string, 0, len(teammates))
+			for _, teammate := range teammates {
+				names = append(names, teammate.Name)
+			}
+			return prompt.LiveContext{
+				ConnectedMCP:    mcpManager.Connected(),
+				ActiveTeammates: names,
+			}
+		}),
 	)
 	return &App{
 		session: agent.NewSession(runner),
