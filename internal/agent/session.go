@@ -20,9 +20,10 @@ type backgroundEvents interface {
 
 // Session 持有单个 Agent 的消息历史，并串行执行用户与 Cron 输入。
 type Session struct {
-	mu       sync.Mutex
-	runner   sessionRunner
-	messages []protocol.Message
+	mu            sync.Mutex
+	runner        sessionRunner
+	messages      []protocol.Message
+	activeRequest string
 }
 
 func NewSession(runner *Runner) *Session {
@@ -37,7 +38,12 @@ func newSession(runner sessionRunner) *Session {
 func (s *Session) Submit(ctx context.Context, inputs ...protocol.Message) (RunResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.run(ctx, inputs)
+	request := ActiveRequest(inputs)
+	result, err := s.run(WithActiveRequest(ctx, request), inputs)
+	if err == nil && request != "" {
+		s.activeRequest = request
+	}
+	return result, err
 }
 
 // TrySubmit 供自动事件非阻塞投递；false 表示 Session 当前仍在处理其他输入。
@@ -69,6 +75,9 @@ func (s *Session) HasBackgroundResults() bool {
 func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult, error) {
 	if s.runner == nil {
 		return RunResult{}, errors.New("session runner is not configured")
+	}
+	if _, configured := activeRequestFromContext(ctx); !configured && s.activeRequest != "" {
+		ctx = WithActiveRequest(ctx, s.activeRequest)
 	}
 	candidate := append(CloneMessages(s.messages), inputs...)
 	result, err := s.runner.Run(ctx, candidate)

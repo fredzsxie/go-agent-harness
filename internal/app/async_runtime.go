@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,6 +128,13 @@ func (a *App) deliverAsyncPending(ctx context.Context, pending *asyncPending) {
 
 	// 自动回合不得竞争终端输入；需要人工审批的工具会 fail closed。
 	autoContext := permission.WithInteractive(ctx, false)
+	if len(pending.cronJobs) > 0 {
+		requests := make([]string, 0, len(pending.cronJobs))
+		for _, job := range pending.cronJobs {
+			requests = append(requests, "Run scheduled task: "+job.Prompt)
+		}
+		autoContext = agent.WithActiveRequest(autoContext, strings.Join(requests, "\n"))
+	}
 	result, acquired, err := a.session.TrySubmit(autoContext, inputs...)
 	if !acquired {
 		logger.Debug("[AsyncRuntime] Agent busy, pending cron=%d team=%d background=%t", len(pending.cronJobs), len(pending.teamEvents), pending.background)

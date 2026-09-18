@@ -9,16 +9,46 @@ import (
 )
 
 type fakeSessionRunner struct {
-	result RunResult
-	err    error
+	result   RunResult
+	err      error
+	requests []string
 }
 
-func (r *fakeSessionRunner) Run(_ context.Context, messages []protocol.Message) (RunResult, error) {
+func (r *fakeSessionRunner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
+	request, _ := activeRequestFromContext(ctx)
+	r.requests = append(r.requests, request)
 	if r.err != nil {
 		return RunResult{}, r.err
 	}
 	r.result.Messages = CloneMessages(messages)
 	return r.result, nil
+}
+
+func TestSessionKeepsUserRequestAcrossAutomaticTurns(t *testing.T) {
+	runner := &fakeSessionRunner{}
+	session := newSession(runner)
+	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "user task"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, acquired, err := session.TrySubmit(context.Background()); err != nil || !acquired {
+		t.Fatalf("background turn failed: acquired=%v err=%v", acquired, err)
+	}
+	scheduled := WithActiveRequest(context.Background(), "Run scheduled task: check")
+	if _, acquired, err := session.TrySubmit(scheduled, protocol.Message{Role: protocol.RoleUser, Content: "[Scheduled] check"}); err != nil || !acquired {
+		t.Fatalf("scheduled turn failed: acquired=%v err=%v", acquired, err)
+	}
+	if _, acquired, err := session.TrySubmit(context.Background()); err != nil || !acquired {
+		t.Fatalf("second background turn failed: acquired=%v err=%v", acquired, err)
+	}
+	want := []string{"user task", "user task", "Run scheduled task: check", "user task"}
+	if len(runner.requests) != len(want) {
+		t.Fatalf("unexpected requests: %#v", runner.requests)
+	}
+	for i := range want {
+		if runner.requests[i] != want[i] {
+			t.Fatalf("request %d = %q, want %q", i, runner.requests[i], want[i])
+		}
+	}
 }
 
 func (*fakeSessionRunner) Close() {}

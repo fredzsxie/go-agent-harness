@@ -87,3 +87,40 @@ func LatestAssistantText(messages []protocol.Message) string {
 	}
 	return ""
 }
+
+// ActiveRequest 收集上一次 assistant 回复后新增的用户请求，自动唤醒时则沿用最近的真实请求。
+func ActiveRequest(messages []protocol.Message) string {
+	lastAssistant := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == protocol.RoleAssistant {
+			lastAssistant = i
+			break
+		}
+	}
+	requests := make([]string, 0, len(messages)-lastAssistant-1)
+	for _, message := range messages[lastAssistant+1:] {
+		if message.Role != protocol.RoleUser {
+			continue
+		}
+		if text := userMessageText(message); text != "" {
+			requests = append(requests, text)
+		}
+	}
+	if len(requests) > 0 {
+		return strings.Join(requests, "\n")
+	}
+	return LatestUserPrompt(messages)
+}
+
+func userMessageText(message protocol.Message) string {
+	parts := make([]string, 0, len(message.Blocks)+1)
+	if text := strings.TrimSpace(message.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, block := range message.Blocks {
+		if block.Type == protocol.BlockText && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
