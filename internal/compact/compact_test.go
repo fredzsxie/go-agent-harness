@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -184,6 +185,27 @@ func TestReactiveCompactKeepsRequestSeparateFromUntrustedSummary(t *testing.T) {
 	}
 	if len(compacted) != 6 {
 		t.Fatalf("expected marker plus five recent messages, got %d", len(compacted))
+	}
+}
+
+func TestReactiveCompactFallsBackWhenSummaryFails(t *testing.T) {
+	manager := New(Config{WorkDir: t.TempDir()})
+	messages := []protocol.Message{
+		{Role: protocol.RoleUser, Content: "old"},
+		{Role: protocol.RoleAssistant, Content: "one"},
+		{Role: protocol.RoleUser, Content: "two"},
+		{Role: protocol.RoleAssistant, Content: "three"},
+		{Role: protocol.RoleUser, Content: "four"},
+		{Role: protocol.RoleAssistant, Content: "five"},
+	}
+	compacted, err := manager.ReactiveCompact(context.Background(), messages, "keep going", func(context.Context, []protocol.Message) (string, error) {
+		return "", errors.New("summary unavailable")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compacted) != 6 || !strings.Contains(compacted[0].Content, "Earlier conversation was trimmed") {
+		t.Fatalf("unexpected reactive fallback: %#v", compacted)
 	}
 }
 

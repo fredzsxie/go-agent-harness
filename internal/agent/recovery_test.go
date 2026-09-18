@@ -59,6 +59,49 @@ func TestRunTurnWithRetrySwitchesModelAfterConsecutive529(t *testing.T) {
 	}
 }
 
+func TestRunTurnWithRetryKeepsPrimaryModelFor429(t *testing.T) {
+	model := &scriptedModel{results: []scriptedModelResult{
+		{err: &ModelError{HTTPStatus: 429, Err: errors.New("rate limited")}},
+		{err: &ModelError{HTTPStatus: 429, Err: errors.New("rate limited")}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}}},
+	}}
+	runner := NewRunner(model, NewRegistry(), nil, "system", WithFallbackModel("fallback-model"))
+	defer runner.Close()
+	runner.recovery.sleep = func(context.Context, time.Duration) error { return nil }
+	runner.recovery.jitter = func(time.Duration) time.Duration { return 0 }
+
+	state := recoveryState{fallbackModel: runner.fallbackModel}
+	if _, err := runner.runTurnWithRetry(context.Background(), &state, "system", nil, DefaultMaxTokens, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.requests) != 3 {
+		t.Fatalf("expected three model attempts, got %d", len(model.requests))
+	}
+	for _, request := range model.requests {
+		if request.Model != "" {
+			t.Fatalf("429 should not switch the primary model: %#v", model.requests)
+		}
+	}
+}
+
+func TestRunTurnWithRetryDoesNotRetryCanceledContext(t *testing.T) {
+	model := &scriptedModel{results: []scriptedModelResult{{
+		err: &ModelError{HTTPStatus: 429, Err: context.Canceled},
+	}}}
+	runner := NewRunner(model, NewRegistry(), nil, "system")
+	defer runner.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	state := recoveryState{}
+	if _, err := runner.runTurnWithRetry(ctx, &state, "system", nil, DefaultMaxTokens, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if len(model.requests) != 1 {
+		t.Fatalf("canceled context should not retry, calls=%d", len(model.requests))
+	}
+}
+
 func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
 	oldDir, err := os.Getwd()
 	if err != nil {
