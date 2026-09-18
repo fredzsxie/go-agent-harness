@@ -1,6 +1,6 @@
 # learn-claude-code：Go 版代码对照
 
-课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s14 MCP Tools**；s15–s17 只预留 package 文档或接口，不包含运行逻辑。
+课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s15 Integrated Harness**；s16–s17 只预留 package 文档或接口，不包含运行逻辑。
 
 ## 已实现章节
 
@@ -16,18 +16,21 @@
 | s08 Context Compact | `internal/compact/`, `internal/agentctx/` | 保留未消费结果，按层压缩，超大结果落盘 |
 | s09 Memory | `internal/memory/`, `internal/agentctx/` | 召回、提取和合并持久 Memory |
 | s10 Task System | `internal/task/` | 持久任务图、依赖、claim 与 complete |
-| s11 Background Tasks | `internal/runtime/background.go` | 显式异步执行，结果在后续 turn 注入 |
+| s11 Background Tasks | `internal/runtime/background.go` | 显式异步执行，完成后唤醒自动 turn 注入结果 |
 | s12 Cron Scheduler | `internal/runtime/cron.go`, `internal/runtime/cron_store.go` | 到期队列、空闲投递、失败恢复和 durable job |
 | s13 Agent Teams | `internal/team/`, `internal/worktree/`, `internal/app/` | 独立上下文、文件邮箱、原子认领、Plan Gate、类型化控制协议与可选 Worktree |
 | s14 MCP Tools | `internal/mcp/`, `internal/app/`, `internal/permission/` | 进程内 discovery/call、动态 Registry、名称冲突检查与 Host Policy |
+| s15 Integrated Harness | `internal/app/`, `internal/agent/`, `internal/agentctx/`, `internal/prompt/` | 统一自动事件、模型恢复、实时 Prompt 与压缩授权边界 |
 
 ## 核心调用关系
 
 ```text
-CLI / Cron / Team Event
+CLI / Cron / Team Event / Background Completion
     -> agent.Session
     -> agent.Runner
-    -> agentctx.Manager.Prepare
+    -> inject background results
+    -> agentctx.Manager.Prepare(activeRequest)
+    -> refresh live system prompt
     -> agent.Worker.RunTurn
     -> model.Anthropic
     -> agent.ToolExecutor
@@ -38,7 +41,7 @@ CLI / Cron / Team Event
 
 `internal/protocol` 只定义 Message 与 ContentBlock，不依赖业务包。`internal/model` 负责 Anthropic SDK 转换；SDK 类型不会进入 Agent Loop。主 Agent 和 Subagent 共用 Worker 与 ToolExecutor，不维护第二套模型和工具调用实现。
 
-Background 与 Cron 同属 `internal/runtime`，但状态完全隔离：`BackgroundManager` 管理命令生命周期，`CronScheduler` 管理未来输入和持久化。Cron 使用 Session 的非阻塞入口，只有成功占用 Session 后才切换为非交互权限模式。
+Background 与 Cron 同属 `internal/runtime`，但状态完全隔离：`BackgroundManager` 管理命令生命周期，`CronScheduler` 管理未来输入和持久化。`internal/app/async_runtime.go` 将 Cron、Team 与 Background 完成事件合并后，统一使用 Session 的非阻塞入口投递。权限模式通过 `context.Context` 传递，不再使用进程级布尔状态。
 
 Agent Teams 的 `team.Runtime` 为每个 Teammate 维护独立 `messages[]` 和受限 Registry。`.mailboxes/` 负责跨线程投递，`.tasks/` 是共享任务状态源；IDLE 先处理消息，再扫描并认领 ready Task。Lead 邮箱事件由 App 单点消费，并通过同一个 Session 非阻塞入口启动新 turn。
 
@@ -47,6 +50,14 @@ Plan Approval 与 Shutdown 使用 `request_id`、类型、参与方和状态共�
 MCP 由 `mcp.Manager` 管理连接和 discovery。`connect_mcp` 成功后，新工具以 `mcp__{server}__{tool}` 注册到主 Agent 的 Registry，下一轮同时刷新 Tools 与 System Prompt；Subagent 和 Teammate 不获得该能力。当前 `docs` 与 `deploy` 是进程内 Mock Server，只模拟 `tools/list` 和 `tools/call`，不实现真实 Transport。
 
 MCP 名称会先规范化，再检查 64 字符限制及与 Built-in/其他 Server 的冲突。只有 Host Policy 能直接放行外部工具；Server annotations 不构成授权。未知或未配置工具默认确认，Cron 与 Team Event 等非交互 turn fail-closed。MCP 输入或 Handler 错误以 `tool_result` 返回，不终止 Agent Loop。
+
+## s15 集成边界
+
+- `agent.Session` 串行化用户与自动 turn，并单独保存当前权威请求。Team 和 Background 事件不会覆盖该请求；Cron 只在当次 turn 临时覆盖。
+- `compact.Manager` 把权威请求与历史摘要分别放入 `Authoritative request` 和不可信 `Reference state`，reactive compact 摘要失败时仍保留最近消息继续。
+- `prompt.Builder` 在每次模型调用前刷新当前时间、工具、MCP Server 和活跃 Teammate；Memory 召回在请求开始时完成并在该请求内复用。
+- `agent.recovery` 对 429/529 执行最多 3 次带 jitter 的指数退避；连续两次 529 可切换备用模型。`max_tokens` 先从 8000 提升到 16000，再最多续写两次。
+- Bash 执行器限时 120 秒、限制返回 50KB，并回收 process group。每个 Bash 都需前台审批，自动 turn 因无法安全读取 stdin 而 fail closed。
 
 ## 日志与注释
 
@@ -65,7 +76,6 @@ MCP 名称会先规范化，再检查 64 字符限制及与 Built-in/其他 Serv
 
 | 章节 | 占位位置 | 当前限制 |
 |---|---|---|
-| s15 Integrated Harness | `internal/app/` | 不新增独立 package |
 | s16 Workflow Runtime | `internal/workflow/` | 不定义 Step、Checkpoint 或执行器 |
 | s17 Goal Loop | `internal/goal/` | 不实现 Evaluator、自动续轮或 `/goal` |
 

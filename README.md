@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s14 MCP Tools**。s01–s14 的主体能力已经接入 Go 版主循环，并对齐了新版课程中影响正确性的主要边界；s15–s17 暂不实现。
+当前学习进度到 **s15 Integrated Harness**。s01–s15 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界；s16–s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -34,7 +34,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s12 | Cron Scheduler | 已完成 | `internal/runtime/cron.go`, `internal/app/app.go` |
 | s13 | Agent Teams | 已完成 | `internal/team/`, `internal/worktree/`, `internal/app/app.go` |
 | s14 | MCP Tools | 已完成 | `internal/mcp/`, `internal/app/` |
-| s15 | Integrated Harness | 仅预留 | 继续使用 `internal/app/` 作为组合根 |
+| s15 | Integrated Harness | 已完成 | `internal/app/`, `internal/agent/`, `internal/agentctx/` |
 | s16 | Workflow Runtime | 仅占位 | `internal/workflow/` |
 | s17 | Goal Loop | 仅占位 | `internal/goal/` |
 
@@ -274,7 +274,7 @@ PreToolUse permission/log hooks
         -> tool_result
 ```
 
-危险命令可以直接拒绝；可能破坏工作区的操作需要用户确认；文件工具还受到 workspace path resolver 的约束。MCP 权限只信任 Host Policy，不把 Server 提供的 `readOnlyHint` 或 `destructiveHint` 当作授权；未明确放行的 MCP 工具默认要求确认，非交互 turn 直接拒绝。
+硬拒绝列表中的危险命令始终禁止；其他 Bash 命令也必须在前台用户 turn 中获得确认。Cron、Team 事件和后台结果唤醒的自动 turn 通过 `context.Context` 标记为非交互，需要终端确认的 Bash 或 MCP 操作会 fail closed，不会与 CLI 争抢 stdin。文件工具仍受 workspace path resolver 约束。MCP 权限只信任 Host Policy，不把 Server 提供的 annotation 当作授权。
 
 ### Todo 与 Subagent
 
@@ -285,12 +285,14 @@ Subagent 使用独立的 `messages[]` 和受限工具池，不会继续派生子
 ### Skill、Compact 与 Memory
 
 - Skill：启动时只加载目录，正文通过 `load_skill` 按需读取。
-- Compact：先处理超大工具结果，只有上下文超出预算时才依次执行 snip、micro 和摘要压缩；未被模型消费的最新工具结果批次不会被提前裁剪。
+- Compact：先处理超大工具结果，只有上下文超出预算时才依次执行 snip、micro 和摘要压缩；未被模型消费的最新工具结果批次不会被提前裁剪。压缩消息中只有 `Authoritative request` 是指令，摘要放在不可信的 `Reference state` 中。
 - Memory：每条记忆独立存为 Markdown；每轮先选择相关记忆，结束后提取长期信息，并在达到阈值时整理；仅持久信息可以写入，临时任务状态和重复内容会被过滤。
 
 ### Background Tasks
 
-只有显式设置 `bash.run_in_background=true` 的命令才会异步执行。工具调用会立即返回 `bg_id`，完成结果则在后续 LLM 调用前以独立的 `<task_notification>` 注入；退出应用时会取消仍在运行的后台命令。
+只有显式设置 `bash.run_in_background=true` 的命令才会异步执行。工具调用会立即返回 `bg_id`；命令完成后 `BackgroundManager` 会唤醒统一自动运行时，并在 Session 空闲时将 `<task_notification>` 注入同一消息历史。后台 `PostToolUse` 在真实命令完成后触发，而不是在返回占位结果时触发。
+
+Bash 前台与后台路径共用同一执行器：默认最长运行 120 秒，最多向模型返回 50KB 输出，并使用独立 process group 在超时或结束时回收子进程。退出应用时会取消仍在运行的后台命令。
 
 ### Cron Scheduler
 
@@ -367,6 +369,38 @@ connect_mcp("docs")
 连接 docs server，搜索 agent hooks，并告诉我当前 documentation API version。
 ```
 
+### Integrated Harness
+
+s15 不再引入独立的业务 package，而是把已有机制收敛到同一条运行链：
+
+```text
+user / cron / team / background event
+        -> Session（串行化 + 权威请求）
+        -> 注入后台结果
+        -> context budget / compact
+        -> 刷新 time + tools + MCP + teammates + memory Prompt
+        -> LLM recovery
+        -> tool_use ?
+             yes -> PreToolUse / permission -> dispatch -> PostToolUse -> tool_result
+             no  -> Stop Hook -> memory finalize -> return
+```
+
+`internal/app/async_runtime.go` 统一处理 Cron、Lead 邮箱和后台完成信号。它通过 `Session.TrySubmit` 非阻塞占用主 Agent；忙碌时保留待投递状态，空闲后重试。三种事件可合并到一次自动 turn，不会各自创建互相竞争的 Agent Loop。
+
+Session 单独保存当前用户请求。Team 事件和 `<task_notification>` 是事件数据，不会覆盖该请求；Cron 只在当次自动 turn 使用 `Run scheduled task: ...` 作为权威请求。当历史需要摘要时，当前请求与历史参考会被明确分区，避免历史中的文本重新获得授权。
+
+LLM 恢复策略：
+
+| 情况 | 处理 |
+|---|---|
+| HTTP 429 | 最多 3 次指数退避重试，保持主模型 |
+| HTTP 529 | 指数退避；连续两次后可切换 `FALLBACK_MODEL_ID` |
+| `stop_reason=max_tokens` | 8000 提升到 16000；仍截断时最多进行两次断点续写 |
+| prompt too long | 执行一次 reactive compact 后重试 |
+| Context 取消 | 立即停止，不重试 |
+
+`max_tokens` 截断时即使响应已包含 `tool_use`，Harness 也不会执行可能不完整的参数，而是先恢复完整响应。
+
 ### 日志
 
 运行日志统一使用 `logger.Debug`、`logger.Info`、`logger.Warn` 和 `logger.Error`。通过 `LOG_MODE` 设置最低输出等级，默认为 `info`；例如 `warn` 只输出 Warn 和 Error，只有 `debug` 会输出 Debug。格式为本地日期时间、Level 和原日志内容，例如：
@@ -397,8 +431,8 @@ go-agent-harness/
 ├── main.go            # 程序入口
 └── internal/
     ├── config/       # 环境与模型配置
-    ├── app/          # CLI 与依赖装配
-    ├── agent/        # Session、Agent Loop、Registry 与 ToolExecutor
+    ├── app/          # CLI、统一自动事件运行时与依赖装配
+    ├── agent/        # Session、Agent Loop、恢复、Registry 与 ToolExecutor
     ├── protocol/     # Message 与 ContentBlock 协议
     ├── model/        # Model 接口的 Anthropic 适配
     ├── agentctx/     # Prompt、Compact 与 Memory 编排
@@ -429,6 +463,8 @@ go-agent-harness/
 ANTHROPIC_API_KEY=your_api_key
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 MODEL_ID=claude-sonnet-4-6
+# 可选：主模型连续返回 529 时切换
+FALLBACK_MODEL_ID=your_fallback_model_id
 LOG_MODE=info
 ```
 
@@ -448,4 +484,4 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go test -race ./...
 
 ## 下一步
 
-下一课是新版 **s15 Integrated Harness**。s15–s17 继续只保留对应文件或接口，不实现具体运行逻辑。
+下一课是新版 **s16 Workflow Runtime**。当前只保留 `internal/workflow/` 与 `internal/goal/` 占位，不实现 s16–s17 的具体运行逻辑。
