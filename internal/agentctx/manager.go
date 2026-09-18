@@ -35,7 +35,7 @@ func New(builder *prompt.Builder, legacyPrompt string) *Manager {
 	}
 }
 
-// StartRequest 在一次用户请求开始时召回 Memory，并生成本次请求稳定使用的 System Prompt。
+// StartRequest 在一次用户请求开始时召回 Memory，并生成本次请求的初始 System Prompt。
 func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message, toolNames []string, selector memory.Selector) (string, error) {
 	relevant, err := m.memory.LoadRelevant(ctx, messages, selector)
 	if err != nil {
@@ -53,7 +53,7 @@ func (m *Manager) StartRequest(ctx context.Context, messages []protocol.Message,
 	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: section}), nil
 }
 
-// RefreshPrompt 复用本次请求已经召回的 Memory，仅刷新动态工具上下文。
+// RefreshPrompt 复用已召回的 Memory，并刷新动态工具。
 func (m *Manager) RefreshPrompt(toolNames []string) string {
 	if m.promptBuilder == nil {
 		return prompt.Build(m.legacyPrompt, m.memorySection, "When the user says \"remember\" or expresses a stable preference, save it as memory after the turn.")
@@ -61,17 +61,17 @@ func (m *Manager) RefreshPrompt(toolNames []string) string {
 	return m.promptBuilder.Get(prompt.Context{EnabledTools: toolNames, Memories: m.memorySection})
 }
 
-func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
-	prepared, _, err := m.compact.Prepare(ctx, messages, summarize)
+func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, activeRequest string, summarize compact.Summarizer) ([]protocol.Message, error) {
+	prepared, _, err := m.compact.Prepare(ctx, messages, activeRequest, summarize)
 	return prepared, err
 }
 
-func (m *Manager) ReactiveCompact(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
-	return m.compact.ReactiveCompact(ctx, messages, summarize)
+func (m *Manager) ReactiveCompact(ctx context.Context, messages []protocol.Message, activeRequest string, summarize compact.Summarizer) ([]protocol.Message, error) {
+	return m.compact.ReactiveCompact(ctx, messages, activeRequest, summarize)
 }
 
-func (m *Manager) Compact(ctx context.Context, messages []protocol.Message, summarize compact.Summarizer) ([]protocol.Message, error) {
-	return m.compact.CompactHistory(ctx, messages, summarize)
+func (m *Manager) Compact(ctx context.Context, messages []protocol.Message, activeRequest string, summarize compact.Summarizer) ([]protocol.Message, error) {
+	return m.compact.CompactHistory(ctx, messages, activeRequest, summarize)
 }
 
 func (m *Manager) MaxReactiveRetries() int {

@@ -51,10 +51,10 @@ func defaultRecoveryPolicy() recoveryPolicy {
 	}
 }
 
-func (r *Runner) runTurnWithRetry(ctx context.Context, state *recoveryState, system string, messages []protocol.Message, maxTokens int64) (WorkerTurn, error) {
+func (r *Runner) runTurnWithRetry(ctx context.Context, state *recoveryState, system string, messages []protocol.Message, maxTokens int64, intercept ToolInterceptor) (WorkerTurn, error) {
 	var lastErr error
 	for attempt := 0; attempt < r.recovery.maxAttempts; attempt++ {
-		turn, err := r.worker.RunTurnWithOptions(ctx, system, messages, r.interceptTool, TurnOptions{
+		turn, err := r.worker.RunTurnWithOptions(ctx, system, messages, intercept, TurnOptions{
 			Model: state.currentModel, MaxTokens: maxTokens,
 		})
 		if err == nil {

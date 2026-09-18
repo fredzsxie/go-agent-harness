@@ -46,7 +46,7 @@ func TestRunTurnWithRetrySwitchesModelAfterConsecutive529(t *testing.T) {
 	runner.recovery.jitter = func(time.Duration) time.Duration { return 0 }
 
 	state := recoveryState{fallbackModel: runner.fallbackModel}
-	turn, err := runner.runTurnWithRetry(context.Background(), &state, "system", nil, DefaultMaxTokens)
+	turn, err := runner.runTurnWithRetry(context.Background(), &state, "system", nil, DefaultMaxTokens, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

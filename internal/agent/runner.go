@@ -106,6 +106,10 @@ func (r *Runner) HasBackgroundResults() bool {
 
 func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	sessionMessages := CloneMessages(messages)
+	activeRequest, configured := activeRequestFromContext(ctx)
+	if !configured {
+		activeRequest = ActiveRequest(sessionMessages)
+	}
 
 	if userPrompt := LatestUserPrompt(sessionMessages); userPrompt != "" {
 		r.hooks.TriggerUserPromptSubmit(userPrompt)
@@ -129,17 +133,19 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 		// connect_mcp 会在工具执行阶段扩展 Registry，下一轮调用前刷新 Prompt 即可看到新能力。
 		systemPrompt = r.context.RefreshPrompt(enabledToolNames(r.registry.Specs()))
 		extractionSource = CloneMessages(sessionMessages)
-		// 后台任务不会主动唤醒 Agent；只在下一次 LLM 调用前收集一次完成结果。
+		// 自动运行时会唤醒 Agent，结果仍在此统一注入消息历史。
 		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())
 
 		// 在每次调用LLM之前，都压缩一次上下文
-		prepared, err := r.context.Prepare(ctx, sessionMessages, r.summarizeCompactHistory)
+		prepared, err := r.context.Prepare(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)
 		if err != nil {
 			return RunResult{}, err
 		}
 		sessionMessages = prepared
 
-		turn, err := r.runTurnWithRetry(ctx, &recoveryState, systemPrompt, sessionMessages, maxTokens)
+		turn, err := r.runTurnWithRetry(ctx, &recoveryState, systemPrompt, sessionMessages, maxTokens, func(ctx context.Context, messages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
+			return r.interceptTool(ctx, messages, call, activeRequest)
+		})
 		logger.Info("[LLM] Main LLM calling done.")
 		if err != nil {
 			// 已产生 assistant 消息说明错误来自工具阶段，不应按模型上下文超限重试。
@@ -147,7 +153,7 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 				return RunResult{}, err
 			}
 			if isPromptTooLong(err) && reactiveRetries < r.context.MaxReactiveRetries() {
-				compacted, compactErr := r.context.ReactiveCompact(ctx, sessionMessages, r.summarizeCompactHistory)
+				compacted, compactErr := r.context.ReactiveCompact(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)
 				if compactErr != nil {
 					return RunResult{}, compactErr
 				}
@@ -265,9 +271,9 @@ func compactToolResultText(results []protocol.ContentBlock) string {
 	return results[0].Text
 }
 
-func (r *Runner) interceptTool(ctx context.Context, sessionMessages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
+func (r *Runner) interceptTool(ctx context.Context, sessionMessages []protocol.Message, call hooks.ToolCall, activeRequest string) (ToolOutcome, bool, error) {
 	if call.Name == "compact" {
-		compacted, err := r.context.Compact(ctx, sessionMessages, r.summarizeCompactHistory)
+		compacted, err := r.context.Compact(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)
 		if err != nil {
 			return ToolOutcome{}, true, err
 		}
