@@ -23,10 +23,17 @@ type ModelRequest struct {
 	Model     string
 }
 
+// TokenUsage 记录单次模型调用消耗的输入与输出 token。
+type TokenUsage struct {
+	InputTokens  int64
+	OutputTokens int64
+}
+
 // ModelResponse 保留 Agent Loop 推进消息和判断截断恢复所需的响应内容。
 type ModelResponse struct {
 	Message    protocol.Message
 	StopReason string
+	Usage      TokenUsage
 }
 
 // ModelError 在不泄露具体 SDK 类型的前提下传递 HTTP 错误状态。

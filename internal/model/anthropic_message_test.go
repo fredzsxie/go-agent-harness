@@ -10,6 +10,30 @@ import (
 	"go-agent-harness/internal/protocol"
 )
 
+func TestParseModelResponsePreservesTokenUsage(t *testing.T) {
+	var response anthropic.Message
+	if err := json.Unmarshal([]byte(`{
+		"id":"msg_01",
+		"type":"message",
+		"role":"assistant",
+		"model":"claude-test",
+		"content":[{"type":"text","text":"done"}],
+		"stop_reason":"end_turn",
+		"stop_sequence":null,
+		"usage":{"input_tokens":12,"output_tokens":7}
+	}`), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	result := parseModelResponse(&response)
+	if result.Message.Content != "done" || result.StopReason != "end_turn" {
+		t.Fatalf("unexpected model response: %#v", result)
+	}
+	if result.Usage.InputTokens != 12 || result.Usage.OutputTokens != 7 {
+		t.Fatalf("unexpected token usage: %#v", result.Usage)
+	}
+}
+
 func TestToAnthropicMessagesPreservesToolProtocol(t *testing.T) {
 	messages := []protocol.Message{
 		{Role: protocol.RoleUser, Content: "读取文件"},

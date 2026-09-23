@@ -50,10 +50,19 @@ func (m *Anthropic) Complete(ctx context.Context, request agent.ModelRequest) (a
 		}
 		return agent.ModelResponse{}, err
 	}
+	return parseModelResponse(response), nil
+}
+
+// parseModelResponse 将 Anthropic 响应及 token 用量转换为项目内部统一结构。
+func parseModelResponse(response *anthropic.Message) agent.ModelResponse {
 	return agent.ModelResponse{
 		Message:    parseAssistantMessage(response.Content),
 		StopReason: string(response.StopReason),
-	}, nil
+		Usage: agent.TokenUsage{
+			InputTokens:  response.Usage.InputTokens,
+			OutputTokens: response.Usage.OutputTokens,
+		},
+	}
 }
 
 func systemBlocks(system string) []anthropic.TextBlockParam {
