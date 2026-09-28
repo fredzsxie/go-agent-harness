@@ -121,6 +121,9 @@ func (b *Builder) assemble(context Context) string {
 	if hasTool(context.EnabledTools, "connect_mcp") {
 		sections = append(sections, "Use connect_mcp before using an external server. Connected tools appear on the next model round with names formatted as mcp__{server}__{tool}.")
 	}
+	if hasTool(context.EnabledTools, "workflow") {
+		sections = append(sections, "Use workflow for a matching Host-registered fixed orchestration. The available review-changes workflow requires the complete change context in args.changes. Resume an interrupted run with its original workflow name and resume_from_run_id; omit args to reuse the saved arguments.")
+	}
 	if context.Memories != "" {
 		sections = append(sections, context.Memories)
 	}

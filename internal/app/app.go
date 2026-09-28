@@ -23,6 +23,7 @@ import (
 	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/team"
 	"go-agent-harness/internal/todo"
+	"go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/worktree"
 )
 
@@ -86,6 +87,18 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	// Cron Scheduler 只注册到主 Agent。
 	cronManager := agentruntime.NewCron(agentruntime.CronConfig{WorkDir: workDir})
 	registerCronTools(registry, cronManager)
+
+	// Workflow 由 Host 注册可信脚本；主 Agent 只选择名称、参数和可选的恢复 run ID。
+	workflowRegistry := workflow.NewRegistry()
+	if err := workflow.RegisterDefaults(workflowRegistry); err != nil {
+		panic(err)
+	}
+	workflowManager := workflow.NewManager(workflow.ManagerConfig{
+		Registry: workflowRegistry,
+		Store:    workflow.NewStore(workflow.StoreConfig{WorkDir: workDir}),
+		Runner:   workflow.NewModelRunner(model, 0),
+	})
+	registerWorkflowTool(registry, workflowManager)
 
 	// System Prompt 常驻 Skill 目录，正文由工具按需加载。
 	skillManager := skill.New()

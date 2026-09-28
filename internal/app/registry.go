@@ -12,6 +12,7 @@ import (
 	"go-agent-harness/internal/team"
 	"go-agent-harness/internal/todo"
 	"go-agent-harness/internal/tool/builtin"
+	"go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/worktree"
 )
 
@@ -196,6 +197,19 @@ func registerMCPTool(registry *agent.Registry, manager *mcp.Manager) {
 			"name": map[string]any{"type": "string", "enum": manager.Available()},
 		},
 	}, manager.RunConnect)
+}
+
+func registerWorkflowTool(registry *agent.Registry, manager *workflow.Manager) {
+	registry.Register(agent.ToolSpec{
+		Name:        "workflow",
+		Description: "Run a Host-registered workflow by name. Pass all source material through args.",
+		Required:    []string{"name"},
+		Properties: map[string]any{
+			"name":               map[string]any{"type": "string", "enum": manager.Names()},
+			"args":               map[string]any{"type": "object", "description": "JSON-safe workflow arguments."},
+			"resume_from_run_id": map[string]any{"type": "string", "pattern": `^wf_[A-Za-z0-9][A-Za-z0-9._-]{0,63}_[0-9a-f]{16}$`},
+		},
+	}, manager.RunTool)
 }
 
 func registerCompactTool(registry *agent.Registry) {

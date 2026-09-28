@@ -8,6 +8,7 @@ import (
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/team"
+	"go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/worktree"
 )
 
@@ -82,6 +83,21 @@ func TestMCPToolsAreMainAgentOnly(t *testing.T) {
 		if subTools[name] {
 			t.Fatalf("subagent should not expose %s", name)
 		}
+	}
+}
+
+func TestWorkflowToolIsMainAgentOnly(t *testing.T) {
+	mainRegistry := newDefaultRegistry()
+	workflowRegistry := workflow.NewRegistry()
+	if err := workflow.RegisterDefaults(workflowRegistry); err != nil {
+		t.Fatal(err)
+	}
+	registerWorkflowTool(mainRegistry, workflow.NewManager(workflow.ManagerConfig{Registry: workflowRegistry}))
+	if !toolNames(mainRegistry.Specs())["workflow"] {
+		t.Fatal("main agent is missing workflow")
+	}
+	if toolNames(newSubagentRegistry().Specs())["workflow"] {
+		t.Fatal("subagent should not expose workflow")
 	}
 }
 

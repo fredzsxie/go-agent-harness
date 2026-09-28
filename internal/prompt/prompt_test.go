@@ -89,3 +89,17 @@ func TestMCPInstructionsRequireConnectTool(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowInstructionsRequireWorkflowTool(t *testing.T) {
+	builder := NewBuilder("skills", "/repo")
+	without := builder.Get(Context{EnabledTools: []string{"task"}})
+	if strings.Contains(without, "review-changes workflow") {
+		t.Fatal("workflow instructions should not appear without workflow tool")
+	}
+	with := builder.Get(Context{EnabledTools: []string{"workflow"}})
+	for _, want := range []string{"review-changes workflow", "args.changes", "resume_from_run_id"} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("workflow instructions missing %q:\n%s", want, with)
+		}
+	}
+}
