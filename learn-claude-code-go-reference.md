@@ -1,6 +1,6 @@
 # learn-claude-code：Go 版代码对照
 
-课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s15 Integrated Harness**；s16–s17 只预留 package 文档或接口，不包含运行逻辑。
+课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s16 Workflow Runtime**；s17 只预留 package 文档，不包含运行逻辑。
 
 ## 已实现章节
 
@@ -21,6 +21,7 @@
 | s13 Agent Teams | `internal/team/`, `internal/worktree/`, `internal/app/` | 独立上下文、文件邮箱、原子认领、Plan Gate、类型化控制协议与可选 Worktree |
 | s14 MCP Tools | `internal/mcp/`, `internal/app/`, `internal/permission/` | 进程内 discovery/call、动态 Registry、名称冲突检查与 Host Policy |
 | s15 Integrated Harness | `internal/app/`, `internal/agent/`, `internal/agentctx/`, `internal/prompt/` | 统一自动事件、模型恢复、实时 Prompt 与压缩授权边界 |
+| s16 Workflow Runtime | `internal/workflow/`, `internal/app/` | Host 注册脚本、结构化输出、并发编排、journal、运行锁与恢复 |
 
 ## 核心调用关系
 
@@ -35,6 +36,7 @@ CLI / Cron / Team Event / Background Completion
     -> model.Anthropic
     -> agent.ToolExecutor
     -> Hooks / Registry / Runtime interceptor
+    -> workflow.Manager（仅 workflow tool_use）
     -> tool_result
     -> 下一轮或返回
 ```
@@ -50,6 +52,10 @@ Plan Approval 与 Shutdown 使用 `request_id`、类型、参与方和状态共�
 MCP 由 `mcp.Manager` 管理连接和 discovery。`connect_mcp` 成功后，新工具以 `mcp__{server}__{tool}` 注册到主 Agent 的 Registry，下一轮同时刷新 Tools 与 System Prompt；Subagent 和 Teammate 不获得该能力。当前 `docs` 与 `deploy` 是进程内 Mock Server，只模拟 `tools/list` 和 `tools/call`，不实现真实 Transport。
 
 MCP 名称会先规范化，再检查 64 字符限制及与 Built-in/其他 Server 的冲突。只有 Host Policy 能直接放行外部工具；Server annotations 不构成授权。未知或未配置工具默认确认，Cron 与 Team Event 等非交互 turn fail-closed。MCP 输入或 Handler 错误以 `tool_result` 返回，不终止 Agent Loop。
+
+Workflow 由 `workflow.Manager` 管理一次完整的工具调用。主 Agent 只提交名称、args 和可选 run ID；可信 Script 由 Host Registry 提供。Workflow agent 直接复用 `agent.Model`，但不携带工具。并发调用共享 semaphore、agent cap 和 token budget，中间结果通过 `.workflows/<runId>.journal.jsonl` checkpoint，不逐步写入主会话。
+
+恢复会先锁定 run，再核对 snapshot 中的 Workflow 名称与原始 args。每个 agent 调用使用基于 label、prompt 和 Schema 的稳定 key；命中 journal 时不调用模型，也不增加本次 Task usage。snapshot/output 原子替换，journal append 后同步，同一 run 由进程内状态和文件锁共同防止并发恢复。
 
 ## s15 集成边界
 
@@ -72,14 +78,22 @@ MCP 名称会先规范化，再检查 64 字符限制及与 Built-in/其他 Serv
 
 核心注释统一使用中文，重点解释消息协议、并发、持久化和状态机约束；Agent、LLM、ContentBlock、tool_use、tool_result、Cron 等专业术语保留英文。
 
+## s16 Workflow 边界
+
+- `workflow` 是同步的主 Agent 工具调用；`async_launched` 只是生命周期字段，不进入统一自动事件运行时。
+- `Parallel` 是 barrier；`Pipeline` 只保证单个 item 的 Stage 顺序，不设置跨 item barrier。
+- 结构化结果校验失败只重试一次；恢复缓存同样重新校验。
+- Script 最多嵌套一层 Workflow，嵌套调用共享 journal、限额和 Task usage。
+- 当前内置 `review-changes`，输入必须通过 `args.changes` 显式提供，不允许 Workflow agent 自行读取工作区。
+- Workflow 的最终 JSON 才会作为 `tool_result` 进入主会话，中间结果不消耗主 Session 的消息历史。
+
 ## 后续占位
 
 | 章节 | 占位位置 | 当前限制 |
 |---|---|---|
-| s16 Workflow Runtime | `internal/workflow/` | 不定义 Step、Checkpoint 或执行器 |
 | s17 Goal Loop | `internal/goal/` | 不实现 Evaluator、自动续轮或 `/goal` |
 
-开始下一章前保持这些占位模块无副作用：不启动 goroutine、不读写文件、不调用 LLM。
+开始下一章前保持 `internal/goal/` 无副作用：不启动 goroutine、不读写文件、不调用 LLM。
 
 ## 验证
 

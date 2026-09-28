@@ -11,6 +11,7 @@ CLAUDE.md
 .tasks/**
 .mailboxes/**
 .worktrees/**
+.workflows/**
 .memory/**
 !.memory/MEMORY.md
 .scheduled_tasks.json

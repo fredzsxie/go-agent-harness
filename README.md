@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s15 Integrated Harness**。s01–s15 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界；s16–s17 暂不实现。
+当前学习进度到 **s16 Workflow Runtime**。s01–s16 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界；s17 暂不实现。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -35,7 +35,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s13 | Agent Teams | 已完成 | `internal/team/`, `internal/worktree/`, `internal/app/app.go` |
 | s14 | MCP Tools | 已完成 | `internal/mcp/`, `internal/app/` |
 | s15 | Integrated Harness | 已完成 | `internal/app/`, `internal/agent/`, `internal/agentctx/` |
-| s16 | Workflow Runtime | 仅占位 | `internal/workflow/` |
+| s16 | Workflow Runtime | 已完成 | `internal/workflow/`, `internal/app/` |
 | s17 | Goal Loop | 仅占位 | `internal/goal/` |
 
 详细的代码映射、验收边界和后续计划见 [learn-claude-code-go-reference.md](./learn-claude-code-go-reference.md)。
@@ -260,6 +260,7 @@ messages := []protocol.Message{
 - `request_plan`、`review_plan`、`create_worktree`
 - `connect_mcp`，连接课程内置的 Mock MCP Server
 - 连接后动态加入的 `mcp__{server}__{tool}`
+- `workflow`，运行 Host 注册的固定编排并支持 journal 恢复
 
 所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。Registry 在每轮模型调用前生成最新工具列表，因此 `connect_mcp` 发现的工具会从下一轮开始生效。
 
@@ -401,6 +402,84 @@ LLM 恢复策略：
 
 `max_tokens` 截断时即使响应已包含 `tool_use`，Harness 也不会执行可能不完整的参数，而是先恢复完整响应。
 
+### Workflow Runtime
+
+s16 在现有主 Agent 工具池中加入 `workflow`。模型只能选择 Host 已注册的 Workflow 名称、传入 JSON 参数以及可选的恢复 run ID，不能提交脚本、Metadata 或任意可执行代码。
+
+```text
+main Agent tool_use: workflow
+        -> PreToolUse / permission
+        -> 解析 name、args、resume_from_run_id
+        -> Host Registry 获取可信 Script
+        -> snapshot + journal + run lock
+        -> Script 编排多个受限 Workflow agent
+        -> output + task_notification
+        -> 一个最终 tool_result 返回 main Agent
+```
+
+模型侧输入格式：
+
+```json
+{
+  "name": "review-changes",
+  "args": {
+    "changes": "diff --git a/main.go b/main.go ...",
+    "budget": 12000
+  }
+}
+```
+
+恢复中断运行时使用：
+
+```json
+{
+  "name": "review-changes",
+  "resume_from_run_id": "wf_review-changes_0123456789abcdef"
+}
+```
+
+省略 `args` 会复用原始参数；如果重新传入 args，则必须与原始值完全一致。未知字段、未知 Workflow、非法 run ID 或不匹配的参数会成为带 `is_error` 的普通 `tool_result`，主 Agent 可以在下一轮修正。
+
+可信 Script 可使用的编排原语：
+
+| 原语 | 行为 |
+|---|---|
+| `Agent` | 执行一次无工具的受限模型调用，可要求结构化输出 |
+| `Parallel` | 并发执行全部 Step，等待所有 Step 结束后返回，结果保持输入顺序 |
+| `Pipeline` | 每个 item 独立依次通过所有 Stage，不设置跨 item 的 Stage barrier |
+| `Phase` | 记录一次去重后的阶段进度 |
+| `Log` | 记录 Workflow 进度，不写入普通会话历史 |
+| `Workflow` | 内联运行另一个已注册 Workflow，最多嵌套一层 |
+
+Workflow agent 复用 `agent.Model`，但不会获得 Bash、文件、MCP、Subagent 或其他工具，只能读取 Script 通过 prompt 明确传入的内容。带 Schema 的输出会先解析并校验；失败时仅追加一次 JSON 提示重试，第二次仍不合法则结束本次 Workflow。当前 Schema 子集支持 object、array、string、boolean、number、required、properties、items、enum 和 `additionalProperties`。
+
+默认每个 run 最多调用 1000 次 agent，最多同时运行 8 次模型请求。可通过正整数 `args.budget` 设置共享 token budget；嵌套 Workflow 共享调用次数、并发限制、预算、journal 和 Task usage。`review-changes` 是当前内置示例，会对 correctness、security、performance、style 四个维度执行 audit → verify pipeline，并按严重程度汇总确认的问题。
+
+#### 同步工具调用与内部并发
+
+`workflow` 对主 Agent 来说仍是一次同步工具调用：当前 Session 会等整个 Script 完成，然后收到一个最终 `tool_result`。返回值中的 `async_launched` 是课程约定的生命周期字段，不表示它被交给 BackgroundManager，也不会创建自动 turn、注入额外 `<task_notification>` 或占用另一个 Session。
+
+Workflow 内部的多个 agent 请求可以并发执行，中间值只存在于 Script 变量、Task progress 和 journal 中，不会逐步进入主会话 `messages[]`，因此不会因为每个内部步骤单独触发主会话上下文压缩。最终 Workflow JSON 作为一个工具结果进入主会话，仍会计入后续上下文预算。
+
+#### Artifact 与恢复
+
+每个 run 在 `.workflows/` 中保存：
+
+| 文件 | 内容 |
+|---|---|
+| `<runId>.json` | Workflow 名称、原始 args 和最终 Task 状态 |
+| `<runId>.journal.jsonl` | 每次成功 agent 调用的 append-only checkpoint |
+| `<runId>.output.json` | 完整结果或失败信息 |
+| `<runId>.lock` | 同一 run 的跨进程文件锁 |
+
+snapshot 和 output 使用临时文件原子替换；journal 每条记录写入后执行 `Sync`。恢复时 Script 会重新运行，但每个 `Agent` 根据 kind、label、prompt 和 Schema 计算与并发完成顺序无关的 semantic key。未变化的调用直接复用 journal，只有变化的调用及其下游步骤重新执行。缓存值也必须重新通过 Schema 校验，损坏记录不会被静默接受。
+
+可以使用下面的请求验证真实调用链：
+
+```text
+读取当前 Git diff，把完整 diff 放入 args.changes，运行 review-changes workflow，并汇总确认的问题。
+```
+
 ### 日志
 
 运行日志统一使用 `logger.Debug`、`logger.Info`、`logger.Warn` 和 `logger.Error`。通过 `LOG_MODE` 设置最低输出等级，默认为 `info`；例如 `warn` 只输出 Warn 和 Error，只有 `debug` 会输出 Debug。格式为本地日期时间、Level 和原日志内容，例如：
@@ -451,7 +530,7 @@ go-agent-harness/
     ├── team/         # s13 Mailbox、Protocol、Plan Gate 与 Teammate Runtime
     ├── worktree/     # s13 Task 绑定的 Git Worktree
     ├── mcp/          # s14 MCP discovery、Mock Server、动态工具与 Host Policy
-    ├── workflow/     # s16 仅占位
+    ├── workflow/     # s16 Registry、编排原语、journal、恢复与示例 Workflow
     └── goal/         # s17 仅占位
 ```
 
@@ -484,4 +563,4 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go test -race ./...
 
 ## 下一步
 
-下一课是新版 **s16 Workflow Runtime**。当前只保留 `internal/workflow/` 与 `internal/goal/` 占位，不实现 s16–s17 的具体运行逻辑。
+下一课是新版 **s17 Goal Loop**。当前只保留 `internal/goal/` 占位，不实现自动目标评估或续轮逻辑。
