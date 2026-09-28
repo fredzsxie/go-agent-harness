@@ -57,6 +57,7 @@ func TestManagerCompletesAndResumesOneToolRun(t *testing.T) {
 	if first.Launched.Status != "async_launched" || first.Task.Status != StatusCompleted || first.Task.Usage != (Usage{Agents: 1, Tokens: 3}) {
 		t.Fatalf("unexpected first run: %#v", first)
 	}
+	assertProgress(t, first.Task.Progress, []string{"workflow_phase", "workflow_agent:started", "workflow_agent:done", "workflow_log"})
 	if _, err := os.Stat(filepath.Join(root, first.Task.OutputFile)); err != nil {
 		t.Fatalf("output artifact missing: %v", err)
 	}
@@ -68,6 +69,7 @@ func TestManagerCompletesAndResumesOneToolRun(t *testing.T) {
 	if resumed.Task.Status != StatusCompleted || resumed.Task.Usage != (Usage{}) || runner.count() != 1 {
 		t.Fatalf("resume did not use journal cache: task=%#v calls=%d", resumed.Task, runner.count())
 	}
+	assertProgress(t, resumed.Task.Progress, []string{"workflow_phase", "workflow_agent:cached", "workflow_log"})
 	if _, err := manager.Run(context.Background(), ToolInput{
 		Name: "simple", Args: map[string]any{"value": "changed"}, HasArgs: true, ResumeFromRunID: first.Task.RunID,
 	}); err == nil {
@@ -85,16 +87,18 @@ func TestManagerPersistsFailedWorkflowAsTaskResult(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ManagerConfig{
-		Registry: registry, Store: NewStore(StoreConfig{WorkDir: t.TempDir()}),
-		Runner: &countingRunner{},
-	})
+	store := NewStore(StoreConfig{WorkDir: t.TempDir()})
+	manager := NewManager(ManagerConfig{Registry: registry, Store: store, Runner: &countingRunner{}})
 	result, err := manager.Run(context.Background(), ToolInput{Name: "fails", Args: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Task.Status != StatusFailed || result.Result.(map[string]any)["error"] != "script failed" {
 		t.Fatalf("unexpected failed task result: %#v", result)
+	}
+	snapshot, err := store.ReadSnapshot(result.Task.RunID)
+	if err != nil || snapshot.Task.Status != StatusFailed || snapshot.Task.OutputFile == "" {
+		t.Fatalf("failed task was not persisted: %#v, %v", snapshot, err)
 	}
 }
 
@@ -121,5 +125,20 @@ func TestManagerRunToolReturnsJSONAndRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := manager.RunTool(context.Background(), map[string]any{"name": "empty", "script": "inject"}); err == nil {
 		t.Fatal("expected unknown tool field to fail")
+	}
+}
+
+func assertProgress(t *testing.T, progress []Progress, expected []string) {
+	t.Helper()
+	actual := make([]string, 0, len(progress))
+	for _, item := range progress {
+		value := item.Type
+		if status, ok := item.Details["status"].(string); ok {
+			value += ":" + status
+		}
+		actual = append(actual, value)
+	}
+	if fmt.Sprint(actual) != fmt.Sprint(expected) {
+		t.Fatalf("unexpected progress: got %v want %v", actual, expected)
 	}
 }
