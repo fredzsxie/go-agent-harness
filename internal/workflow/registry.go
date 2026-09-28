@@ -97,6 +97,7 @@ func ParseToolInput(input any) (ToolInput, error) {
 			return ToolInput{}, fmt.Errorf("workflow args must be an object")
 		}
 		parsed.Args = args
+		parsed.HasArgs = true
 	}
 	if rawRunID, exists := payload["resume_from_run_id"]; exists {
 		runID, ok := rawRunID.(string)

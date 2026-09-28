@@ -50,6 +50,7 @@ type Definition struct {
 type ToolInput struct {
 	Name            string
 	Args            map[string]any
+	HasArgs         bool
 	ResumeFromRunID string
 }
 
