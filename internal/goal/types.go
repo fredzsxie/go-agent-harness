@@ -8,8 +8,10 @@ import (
 )
 
 const (
-	DefaultBlockCap = 8
-	MaxConditionLen = 4000
+	DefaultBlockCap             = 8
+	DefaultEvaluatorMaxTokens   = 512
+	DefaultTranscriptCharacters = 24000
+	MaxConditionLen             = 4000
 )
 
 // Evaluation 是独立 evaluator 对完成条件的判断。
