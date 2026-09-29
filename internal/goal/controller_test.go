@@ -87,6 +87,32 @@ func TestControllerEvaluatesBlockAndAchievement(t *testing.T) {
 	}
 }
 
+func TestControllerStopBuildsSameLoopContinuation(t *testing.T) {
+	controller, err := New(Config{Evaluator: &sequenceEvaluator{replies: []evaluatorReply{{
+		evaluation: Evaluation{Reason: "test evidence is missing"},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Set("go test ./... passes", 0); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := controller.Stop(context.Background(), hooks.StopContext{
+		Messages: []protocol.Message{{Role: protocol.RoleAssistant, Content: "finished"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != hooks.StopBlock {
+		t.Fatalf("unexpected decision: %#v", decision)
+	}
+	for _, want := range []string{"[Goal still active]", "Condition: go test ./... passes", "Evaluator: test evidence is missing", "Continue working"} {
+		if !strings.Contains(decision.Reason, want) {
+			t.Fatalf("continuation missing %q:\n%s", want, decision.Reason)
+		}
+	}
+}
+
 func TestControllerDefersAndStopsAtBlockCap(t *testing.T) {
 	evaluator := &sequenceEvaluator{replies: []evaluatorReply{
 		{evaluation: Evaluation{Reason: "first"}},

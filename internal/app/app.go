@@ -12,6 +12,7 @@ import (
 
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/config"
+	"go-agent-harness/internal/goal"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/mcp"
 	llmmodel "go-agent-harness/internal/model"
@@ -31,6 +32,7 @@ type App struct {
 	session appSession
 	cron    *agentruntime.CronScheduler
 	team    *team.Runtime
+	goal    *goal.Controller
 	in      io.Reader
 	out     io.Writer
 }
@@ -56,6 +58,16 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	mcpManager := mcp.New(registry)
 	registerMCPTool(registry, mcpManager)
 	hookManager := newDefaultHooks(mcpManager)
+	goalEvaluator, err := goal.NewPromptEvaluator(model, cfg.Model, 0)
+	if err != nil {
+		panic(err)
+	}
+	goalController, err := goal.New(goal.Config{Evaluator: goalEvaluator})
+	if err != nil {
+		panic(err)
+	}
+	// Goal 是同一条 Agent Loop 上的 Stop gate，不创建第二个 Session。
+	hookManager.OnStop(goalController.Stop)
 
 	// TodoWrite 只维护当前 Session 的临时计划。
 	todoManager := todo.NewManager(out)
@@ -127,6 +139,7 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 		session: agent.NewSession(runner),
 		cron:    cronManager,
 		team:    teamRuntime,
+		goal:    goalController,
 		in:      in,
 		out:     out,
 	}

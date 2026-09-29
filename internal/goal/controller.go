@@ -156,6 +156,20 @@ func (c *Controller) EvaluateAfterTurn(ctx context.Context, messages []protocol.
 	return c.finishEvaluation(generation, evaluation, err)
 }
 
+// Stop 将 Goal 评估接到通用 Stop Hook，并为 block 决策生成下一轮可直接使用的反馈。
+func (c *Controller) Stop(ctx context.Context, input hooks.StopContext) (hooks.StopDecision, error) {
+	decision := c.EvaluateAfterTurn(ctx, input.Messages, false)
+	if decision.Action != hooks.StopBlock {
+		return decision, nil
+	}
+	state, _ := c.Active()
+	decision.Reason = fmt.Sprintf(
+		"[Goal still active]\nCondition: %s\nEvaluator: %s\nContinue working and surface the missing evidence.",
+		state.Condition, decision.Reason,
+	)
+	return decision, nil
+}
+
 func (c *Controller) finishEvaluation(generation uint64, evaluation Evaluation, evaluationErr error) hooks.StopDecision {
 	c.mu.Lock()
 	defer c.mu.Unlock()
