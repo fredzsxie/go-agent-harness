@@ -13,6 +13,7 @@ type WorkerTurn struct {
 	Tools      ToolBatch
 	HasTools   bool
 	StopReason string
+	Usage      TokenUsage
 }
 
 type TurnOptions struct {
@@ -49,7 +50,10 @@ func (w *Worker) RunTurnWithOptions(ctx context.Context, system string, messages
 		return WorkerTurn{}, err
 	}
 
-	turn := WorkerTurn{Assistant: response.Message, HasTools: messageHasToolUse(response.Message), StopReason: response.StopReason}
+	turn := WorkerTurn{
+		Assistant: response.Message, HasTools: messageHasToolUse(response.Message),
+		StopReason: response.StopReason, Usage: response.Usage,
+	}
 	// max_tokens 可能截断 tool_use 参数，必须先由 Runner 恢复完整响应。
 	if !turn.HasTools || turn.StopReason == "max_tokens" {
 		return turn, nil

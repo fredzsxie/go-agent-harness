@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -29,6 +30,15 @@ type TokenUsage struct {
 	OutputTokens int64
 }
 
+func (u TokenUsage) Total() int64 {
+	return u.InputTokens + u.OutputTokens
+}
+
+func (u *TokenUsage) Add(other TokenUsage) {
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+}
+
 // ModelResponse 保留 Agent Loop 推进消息和判断截断恢复所需的响应内容。
 type ModelResponse struct {
 	Message    protocol.Message
@@ -48,6 +58,8 @@ func (e *ModelError) Unwrap() error { return e.Err }
 type RunResult struct {
 	Messages []protocol.Message
 	Output   string
+	Usage    TokenUsage
+	Stop     hooks.StopDecision
 }
 
 // Model 隔离具体 LLM SDK，使主 Agent、Subagent 和上下文能力复用同一调用边界。

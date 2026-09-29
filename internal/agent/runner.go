@@ -113,6 +113,7 @@ func (r *Runner) HasBackgroundResults() bool {
 
 func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	sessionMessages := CloneMessages(messages)
+	tokenBaseline := tokenBaselineFromContext(ctx)
 	activeRequest, configured := activeRequestFromContext(ctx)
 	if !configured {
 		activeRequest = ActiveRequest(sessionMessages)
@@ -129,6 +130,8 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 	}
 
 	toolCallCnt := 0
+	turnCount := 0
+	var usage TokenUsage
 	reactiveRetries := 0
 	recoveryState := recoveryState{fallbackModel: r.fallbackModel}
 	maxTokens := DefaultMaxTokens
@@ -146,29 +149,33 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 		// 在每次调用LLM之前，都压缩一次上下文
 		prepared, err := r.context.Prepare(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)
 		if err != nil {
-			return RunResult{}, err
+			return RunResult{Messages: sessionMessages, Usage: usage}, err
 		}
 		sessionMessages = prepared
 
 		turn, err := r.runTurnWithRetry(ctx, &recoveryState, systemPrompt, sessionMessages, maxTokens, func(ctx context.Context, messages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error) {
 			return r.interceptTool(ctx, messages, call, activeRequest)
 		})
+		usage.Add(turn.Usage)
+		if turn.Assistant.Role != "" {
+			turnCount++
+		}
 		logger.Info("[LLM] Main LLM calling done.")
 		if err != nil {
 			// 已产生 assistant 消息说明错误来自工具阶段，不应按模型上下文超限重试。
 			if turn.Assistant.Role != "" {
-				return RunResult{}, err
+				return RunResult{Messages: sessionMessages, Usage: usage}, err
 			}
 			if isPromptTooLong(err) && reactiveRetries < r.context.MaxReactiveRetries() {
 				compacted, compactErr := r.context.ReactiveCompact(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)
 				if compactErr != nil {
-					return RunResult{}, compactErr
+					return RunResult{Messages: sessionMessages, Usage: usage}, compactErr
 				}
 				sessionMessages = compacted
 				reactiveRetries++
 				continue
 			}
-			return RunResult{}, err
+			return RunResult{Messages: sessionMessages, Usage: usage}, err
 		}
 		reactiveRetries = 0
 
@@ -190,7 +197,7 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 				logger.Warn("[LLM] continuing truncated response, recovery %d/%d", recoveryCount, maxRecoveryRetries)
 				continue
 			}
-			return RunResult{Messages: sessionMessages, Output: responseText(assistantMessage)}, nil
+			return RunResult{Messages: sessionMessages, Output: responseText(assistantMessage), Usage: usage}, nil
 		}
 		maxTokens = DefaultMaxTokens
 		hasEscalated = false
@@ -200,10 +207,23 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 		// 兼容供应商的 stop_reason 可能不准确，因此只根据真实 tool_use block 判断是否执行工具。
 		// 没有真实工具块时不能追加空的 user/tool_result 回合。
 		if !hasToolUse {
-			if force := r.hooks.TriggerStop(hooks.StopContext{ToolCallCnt: toolCallCnt}); force != "" {
+			decision, err := r.hooks.TriggerStop(ctx, hooks.StopContext{
+				ToolCallCnt: toolCallCnt,
+				TurnCount:   turnCount,
+				TotalTokens: tokenBaseline + usage.Total(),
+				Messages:    CloneMessages(sessionMessages),
+			})
+			if err != nil {
+				return RunResult{Messages: sessionMessages, Usage: usage}, err
+			}
+			if decision.Action == hooks.StopBlock {
+				feedback := strings.TrimSpace(decision.Reason)
+				if feedback == "" {
+					feedback = "[Stop hook blocked completion. Continue working.]"
+				}
 				sessionMessages = append(sessionMessages, protocol.Message{
 					Role:    protocol.RoleUser,
-					Content: force,
+					Content: feedback,
 				})
 				continue
 			}
@@ -227,9 +247,11 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 				return RunResult{
 					Messages: sessionMessages,
 					Output:   finalText,
+					Usage:    usage,
+					Stop:     decision,
 				}, nil
 			}
-			return RunResult{Messages: sessionMessages}, nil
+			return RunResult{Messages: sessionMessages, Usage: usage, Stop: decision}, nil
 		}
 
 		roundsSinceTodo++
@@ -244,7 +266,7 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 			continue
 		}
 		if len(toolResults) == 0 {
-			return RunResult{Messages: sessionMessages}, nil
+			return RunResult{Messages: sessionMessages, Usage: usage}, nil
 		}
 		if messageUsesTool(assistantMessage, "todo_write") {
 			roundsSinceTodo = 0

@@ -42,6 +42,20 @@ func TestWorkerRunsModelAndToolsThroughOnePath(t *testing.T) {
 	}
 }
 
+func TestWorkerPreservesModelUsage(t *testing.T) {
+	model := &responseModel{response: ModelResponse{
+		Message: protocol.Message{Role: protocol.RoleAssistant, Content: "done"},
+		Usage:   TokenUsage{InputTokens: 12, OutputTokens: 5},
+	}}
+	turn, err := NewWorker(model, NewRegistry(), nil).RunTurn(context.Background(), "system", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Usage != (TokenUsage{InputTokens: 12, OutputTokens: 5}) {
+		t.Fatalf("unexpected usage: %#v", turn.Usage)
+	}
+}
+
 func TestToolInterceptorCanReplaceHistoryAndStopBatch(t *testing.T) {
 	registry := NewRegistry()
 	executor := NewToolExecutor(registry, hooks.NewManager())

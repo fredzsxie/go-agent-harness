@@ -52,9 +52,9 @@ func newDefaultHooks(mcpManager *mcp.Manager) *hooks.Manager {
 	})
 
 	// ----- Stop -----
-	hookManager.OnStop(func(ctx hooks.StopContext) string {
+	hookManager.OnStop(func(_ context.Context, ctx hooks.StopContext) (hooks.StopDecision, error) {
 		logger.Info("[HOOK] Stop: session used %d tool calls", ctx.ToolCallCnt)
-		return ""
+		return hooks.StopDecision{Action: hooks.StopAllow}, nil
 	})
 	return hookManager
 }

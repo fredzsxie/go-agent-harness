@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -112,9 +113,9 @@ func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 	model := &scriptedModel{results: []scriptedModelResult{
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "discarded"}, StopReason: "max_tokens"}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part one"}, StopReason: "max_tokens"}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part two"}, StopReason: "end_turn"}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "discarded"}, StopReason: "max_tokens", Usage: TokenUsage{InputTokens: 10, OutputTokens: 1}}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part one"}, StopReason: "max_tokens", Usage: TokenUsage{InputTokens: 11, OutputTokens: 2}}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part two"}, StopReason: "end_turn", Usage: TokenUsage{InputTokens: 12, OutputTokens: 3}}},
 		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}, StopReason: "end_turn"}},
 	}}
 	runner := NewRunner(model, NewRegistry(), nil, "system")
@@ -127,11 +128,60 @@ func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
 	if result.Output != "part two" {
 		t.Fatalf("unexpected output: %q", result.Output)
 	}
+	if result.Usage != (TokenUsage{InputTokens: 33, OutputTokens: 6}) {
+		t.Fatalf("unexpected main Agent usage: %#v", result.Usage)
+	}
 	if len(model.requests) < 3 || model.requests[0].MaxTokens != DefaultMaxTokens || model.requests[1].MaxTokens != escalatedMaxTokens {
 		t.Fatalf("unexpected token escalation: %#v", model.requests)
 	}
 	thirdMessages := model.requests[2].Messages
 	if len(thirdMessages) < 3 || thirdMessages[len(thirdMessages)-2].Content != "part one" || thirdMessages[len(thirdMessages)-1].Content != continuationPrompt {
 		t.Fatalf("continuation context missing: %#v", thirdMessages)
+	}
+}
+
+func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+
+	model := &scriptedModel{results: []scriptedModelResult{
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "not yet"}, Usage: TokenUsage{InputTokens: 4, OutputTokens: 1}}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "done"}, Usage: TokenUsage{InputTokens: 6, OutputTokens: 2}}},
+		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}}},
+	}}
+	hookManager := hooks.NewManager()
+	stopCalls := 0
+	hookManager.OnStop(func(_ context.Context, input hooks.StopContext) (hooks.StopDecision, error) {
+		stopCalls++
+		if len(input.Messages) == 0 || input.Messages[len(input.Messages)-1].Role != protocol.RoleAssistant {
+			t.Fatalf("Stop hook did not receive the completed turn: %#v", input.Messages)
+		}
+		if stopCalls == 1 {
+			return hooks.StopDecision{Action: hooks.StopBlock, Reason: "[Goal still active] continue"}, nil
+		}
+		return hooks.StopDecision{Action: hooks.StopAllow}, nil
+	})
+	runner := NewRunner(model, NewRegistry(), hookManager, "system")
+	defer runner.Close()
+
+	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "done" || result.Stop.Action != hooks.StopAllow || stopCalls != 2 {
+		t.Fatalf("unexpected result=%#v stopCalls=%d", result, stopCalls)
+	}
+	if result.Usage != (TokenUsage{InputTokens: 10, OutputTokens: 3}) {
+		t.Fatalf("unexpected usage: %#v", result.Usage)
+	}
+	secondRequest := model.requests[1].Messages
+	if len(secondRequest) == 0 || secondRequest[len(secondRequest)-1].Content != "[Goal still active] continue" {
+		t.Fatalf("Stop feedback was not appended: %#v", secondRequest)
 	}
 }

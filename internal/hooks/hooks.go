@@ -1,11 +1,15 @@
 package hooks
 
-import "context"
+import (
+	"context"
+
+	"go-agent-harness/internal/protocol"
+)
 
 type UserPromptSubmitHook func(query string)
 type PreToolUseHook func(ctx context.Context, call ToolCall) string
 type PostToolUseHook func(call ToolCall, output string)
-type StopHook func(ctx StopContext) string
+type StopHook func(context.Context, StopContext) (StopDecision, error)
 
 type ToolCall struct {
 	ID    string
@@ -15,6 +19,28 @@ type ToolCall struct {
 
 type StopContext struct {
 	ToolCallCnt int
+	TurnCount   int
+	TotalTokens int64
+	Messages    []protocol.Message
+}
+
+type StopAction string
+
+const (
+	StopAllow    StopAction = "allow"
+	StopBlock    StopAction = "block"
+	StopDefer    StopAction = "defer"
+	StopAchieved StopAction = "achieved"
+	StopFailed   StopAction = "failed"
+	StopLimit    StopAction = "limit"
+	StopError    StopAction = "error"
+)
+
+// StopDecision 将“继续当前 Agent Loop”和“把控制权交还用户”明确分开。
+// 只有 block 会立刻追加反馈并进入下一轮，其余 action 都结束本次 Run。
+type StopDecision struct {
+	Action StopAction
+	Reason string
 }
 
 type Manager struct {
@@ -70,11 +96,15 @@ func (m *Manager) TriggerPostToolUse(call ToolCall, output string) {
 	}
 }
 
-func (m *Manager) TriggerStop(ctx StopContext) string {
+func (m *Manager) TriggerStop(ctx context.Context, input StopContext) (StopDecision, error) {
 	for _, hook := range m.stop {
-		if force := hook(ctx); force != "" {
-			return force
+		decision, err := hook(ctx, input)
+		if err != nil {
+			return StopDecision{}, err
+		}
+		if decision.Action != "" && decision.Action != StopAllow {
+			return decision, nil
 		}
 	}
-	return ""
+	return StopDecision{Action: StopAllow}, nil
 }

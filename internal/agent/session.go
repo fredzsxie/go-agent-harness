@@ -24,6 +24,7 @@ type Session struct {
 	runner        sessionRunner
 	messages      []protocol.Message
 	activeRequest string
+	totalUsage    TokenUsage
 }
 
 func NewSession(runner *Runner) *Session {
@@ -72,6 +73,14 @@ func (s *Session) HasBackgroundResults() bool {
 	return false
 }
 
+// TotalTokens 返回当前 Session 中主 Agent 调用累计消耗的 token。
+// Workflow、memory 和后续 Goal evaluator 的独立模型调用不计入该值。
+func (s *Session) TotalTokens() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalUsage.Total()
+}
+
 func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult, error) {
 	if s.runner == nil {
 		return RunResult{}, errors.New("session runner is not configured")
@@ -79,8 +88,10 @@ func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult
 	if _, configured := activeRequestFromContext(ctx); !configured && s.activeRequest != "" {
 		ctx = WithActiveRequest(ctx, s.activeRequest)
 	}
+	ctx = withTokenBaseline(ctx, s.totalUsage.Total())
 	candidate := append(CloneMessages(s.messages), inputs...)
 	result, err := s.runner.Run(ctx, candidate)
+	s.totalUsage.Add(result.Usage)
 	if err == nil {
 		s.messages = result.Messages
 	}

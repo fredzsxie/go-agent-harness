@@ -9,14 +9,16 @@ import (
 )
 
 type fakeSessionRunner struct {
-	result   RunResult
-	err      error
-	requests []string
+	result    RunResult
+	err       error
+	requests  []string
+	baselines []int64
 }
 
 func (r *fakeSessionRunner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	request, _ := activeRequestFromContext(ctx)
 	r.requests = append(r.requests, request)
+	r.baselines = append(r.baselines, tokenBaselineFromContext(ctx))
 	if r.err != nil {
 		return RunResult{}, r.err
 	}
@@ -70,5 +72,23 @@ func TestSessionCommitsMessagesOnlyAfterSuccessfulRun(t *testing.T) {
 	}
 	if len(result.Messages) != 2 || result.Messages[0].Content != "first" || result.Messages[1].Content != "second" {
 		t.Fatalf("unexpected messages: %#v", result.Messages)
+	}
+}
+
+func TestSessionAccumulatesMainAgentUsage(t *testing.T) {
+	runner := &fakeSessionRunner{result: RunResult{Usage: TokenUsage{InputTokens: 8, OutputTokens: 3}}}
+	session := newSession(runner)
+	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	runner.result.Usage = TokenUsage{InputTokens: 5, OutputTokens: 2}
+	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.TotalTokens(); got != 18 {
+		t.Fatalf("TotalTokens() = %d, want 18", got)
+	}
+	if len(runner.baselines) != 2 || runner.baselines[0] != 0 || runner.baselines[1] != 11 {
+		t.Fatalf("unexpected token baselines: %#v", runner.baselines)
 	}
 }
