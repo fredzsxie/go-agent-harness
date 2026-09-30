@@ -1,6 +1,6 @@
 # learn-claude-code：Go 版代码对照
 
-课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目实现到 **s16 Workflow Runtime**；s17 只预留 package 文档，不包含运行逻辑。
+课程基线为 `~/Documents/Code/learn-claude-code` 的新版 s01–s17。当前项目已实现到 **s17 Goal Loop**。
 
 ## 已实现章节
 
@@ -22,6 +22,7 @@
 | s14 MCP Tools | `internal/mcp/`, `internal/app/`, `internal/permission/` | 进程内 discovery/call、动态 Registry、名称冲突检查与 Host Policy |
 | s15 Integrated Harness | `internal/app/`, `internal/agent/`, `internal/agentctx/`, `internal/prompt/` | 统一自动事件、模型恢复、实时 Prompt 与压缩授权边界 |
 | s16 Workflow Runtime | `internal/workflow/`, `internal/app/` | Host 注册脚本、结构化输出、并发编排、journal、运行锁与恢复 |
+| s17 Goal Loop | `internal/goal/`, `internal/hooks/`, `internal/app/` | Session 级完成条件、独立 evaluator、同循环续轮、pending defer 与退出上限 |
 
 ## 核心调用关系
 
@@ -38,7 +39,10 @@ CLI / Cron / Team Event / Background Completion
     -> Hooks / Registry / Runtime interceptor
     -> workflow.Manager（仅 workflow tool_use）
     -> tool_result
-    -> 下一轮或返回
+    -> 下一轮
+    -> 无 tool_use 时进入 Goal Stop Hook
+       -> block：反馈进入同一个 messages[] 后继续
+       -> 其他决策：返回当前 Session 调用方
 ```
 
 `internal/protocol` 只定义 Message 与 ContentBlock，不依赖业务包。`internal/model` 负责 Anthropic SDK 转换；SDK 类型不会进入 Agent Loop。主 Agent 和 Subagent 共用 Worker 与 ToolExecutor，不维护第二套模型和工具调用实现。
@@ -87,13 +91,15 @@ Workflow 由 `workflow.Manager` 管理一次完整的工具调用。主 Agent �
 - 当前内置 `review-changes`，输入必须通过 `args.changes` 显式提供，不允许 Workflow agent 自行读取工作区。
 - Workflow 的最终 JSON 才会作为 `tool_result` 进入主会话，中间结果不消耗主 Session 的消息历史。
 
-## 后续占位
+## s17 Goal Loop 边界
 
-| 章节 | 占位位置 | 当前限制 |
-|---|---|---|
-| s17 Goal Loop | `internal/goal/` | 不实现 Evaluator、自动续轮或 `/goal` |
-
-开始下一章前保持 `internal/goal/` 无副作用：不启动 goroutine、不读写文件、不调用 LLM。
+- `/goal <condition>` 设置 Session 范围内唯一的活动 Goal，并把 condition 作为当前用户任务提交；`/goal` 和清理命令不启动模型 turn。
+- Stop Hook 只在主 Agent 没有真实 `tool_use` 时评估。`block` 反馈追加到同一个 `messages[]`，不会创建第二个 Session 或隐藏队列。
+- `PromptEvaluator` 复用 `agent.Model`，但不携带工具；其请求、响应和 token usage 不进入主 Session。
+- evaluator transcript 默认保留最近 24,000 字符的完整消息，并保留 tool_use/tool_result 证据。响应必须满足严格的 `{ok, reason, impossible?}` JSON 契约。
+- Background 正在运行，或 Teammate 处于 working、stopping、waiting_approval 时返回 defer；完成事件进入原 Session 后再评估。Workflow 是同步工具调用，不参与 pending 判断。
+- `MAX_TURNS` 和连续 Stop block cap 都是 Host 退出边界。达到上限或 evaluator 出错时保留活动 Goal，用户可以检查、继续、替换或清理。
+- `goal_status` Event 和 `goal.Restore` 提供 Host 持久化接口；当前 CLI 不持久化完整 Session，也不会在进程重启后自动恢复 Goal。
 
 ## 验证
 

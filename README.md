@@ -16,7 +16,7 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s16 Workflow Runtime**。s01–s16 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界；s17 暂不实现。
+当前学习进度到 **s17 Goal Loop**。s01–s17 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
@@ -36,7 +36,7 @@ Harness = tools + knowledge + context + permissions + runtime
 | s14 | MCP Tools | 已完成 | `internal/mcp/`, `internal/app/` |
 | s15 | Integrated Harness | 已完成 | `internal/app/`, `internal/agent/`, `internal/agentctx/` |
 | s16 | Workflow Runtime | 已完成 | `internal/workflow/`, `internal/app/` |
-| s17 | Goal Loop | 仅占位 | `internal/goal/` |
+| s17 | Goal Loop | 已完成 | `internal/goal/`, `internal/hooks/`, `internal/app/` |
 
 详细的代码映射、验收边界和后续计划见 [learn-claude-code-go-reference.md](./learn-claude-code-go-reference.md)。
 
@@ -480,6 +480,85 @@ snapshot 和 output 使用临时文件原子替换；journal 每条记录写入�
 读取当前 Git diff，把完整 diff 放入 args.changes，运行 review-changes workflow，并汇总确认的问题。
 ```
 
+### Goal Loop
+
+s17 把 `/goal` 实现为当前 Session 上的 Stop Hook。主模型停止调用工具只表示本轮想结束；存在活动 Goal 时，独立 evaluator 会根据对话中的实际证据判断整个完成条件是否已经满足。
+
+```text
+main Agent 无 tool_use
+        -> Goal Stop Hook
+        -> 是否有仍运行的 Background / Team 工作？
+             yes -> defer，保留 Goal 并归还用户控制
+             no  -> 独立 evaluator（无工具、独立模型调用）
+                       |
+             +---------+----------+
+             |                    |
+           block               terminal
+             |          achieved / failed /
+             |          error / limit / defer
+             v                    |
+追加 [Goal still active]           v
+到同一个 messages[]          返回当前 Session 调用方
+             |
+        同一个 Runner 继续
+```
+
+Goal 不会创建第二个 Session，也没有隐藏的 CommandQueue。`block` 反馈直接进入当前 `messages[]`；evaluator 响应本身不会进入主历史，其 token 也不计入主 Agent usage。evaluator 默认读取最近 24,000 个字符的完整消息；只有最新单条消息本身超限时才保留头尾并裁掉中间。
+
+#### CLI 使用
+
+设置完成条件并立即开始工作：
+
+```text
+/goal go test ./... exits with code 0 and lint reports no errors
+```
+
+查看活动条件、耗时、评估次数、主 Agent token 消耗和最近判断：
+
+```text
+/goal
+```
+
+清理 Goal：
+
+```text
+/goal clear
+```
+
+`stop`、`off`、`reset`、`none` 和 `cancel` 也是清理别名。设置新条件会替换旧 Goal。`goal.Restore` 可以从 Host 提供的 `goal_status` 事件恢复最后一个活动 Goal，但当前 CLI 不持久化完整 Session，因此进程重启后不会自动恢复。
+
+#### Stop 决策与退出边界
+
+| action | 行为 |
+|---|---|
+| `allow` | 没有活动 Goal，按普通 Agent Loop 返回 |
+| `block` | evaluator 认为证据不足，追加反馈并在同一个 Runner 内继续 |
+| `defer` | Background、Team 或人工审批尚未完成，保留 Goal 并归还控制权 |
+| `achieved` | 条件已由对话证据证明，记录成功并清理活动 Goal |
+| `failed` | evaluator 判断条件无法完成，记录失败并清理活动 Goal |
+| `limit` | 达到 turn 或连续 block 上限，保留活动 Goal 并归还控制权 |
+| `error` | evaluator 调用或响应校验失败，保留活动 Goal 并归还控制权 |
+
+后台命令只有处于 `running` 才触发 defer；已完成结果会先作为 `<task_notification>` 注入会话。Teammate 的 `working`、`stopping` 和 `waiting_approval` 会跳过 evaluator，其中等待审批会立即把控制权交给用户；`idle` 不构成 pending。Workflow 对主 Agent 仍是同步工具调用，不伪装成 pending work。
+
+evaluator 只接受严格 JSON：
+
+```json
+{"ok": false, "reason": "missing test output", "impossible": false}
+```
+
+缺失 `ok` 或 `reason`、未知字段、尾随内容、空 reason，以及同时返回 `ok=true` 和 `impossible=true` 都会成为 `error`，不会被误判为完成；省略 `impossible` 等价于 `false`。
+
+#### Goal 配置
+
+| 环境变量 | 默认值 | 含义 |
+|---|---|---|
+| `GOAL_EVALUATOR_MODEL_ID` | `MODEL_ID` | 独立 evaluator 使用的模型 |
+| `MAX_TURNS` | `0` | 单次 Runner 的主模型调用上限；`0` 表示不限制 |
+| `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | `8` | 一次用户请求中允许连续 block 的次数 |
+
+达到任一上限都只停止自动继续，不会将 Goal 标记为成功，也不会静默清理。用户发起新的普通请求时会获得新的连续 block 窗口。
+
 ### 日志
 
 运行日志统一使用 `logger.Debug`、`logger.Info`、`logger.Warn` 和 `logger.Error`。通过 `LOG_MODE` 设置最低输出等级，默认为 `info`；例如 `warn` 只输出 Warn 和 Error，只有 `debug` 会输出 Debug。格式为本地日期时间、Level 和原日志内容，例如：
@@ -531,7 +610,7 @@ go-agent-harness/
     ├── worktree/     # s13 Task 绑定的 Git Worktree
     ├── mcp/          # s14 MCP discovery、Mock Server、动态工具与 Host Policy
     ├── workflow/     # s16 Registry、编排原语、journal、恢复与示例 Workflow
-    └── goal/         # s17 仅占位
+    └── goal/         # s17 Goal 状态、独立 evaluator、transcript 与 Stop gate
 ```
 
 ## 快速开始
@@ -545,6 +624,11 @@ MODEL_ID=claude-sonnet-4-6
 # 可选：主模型连续返回 529 时切换
 FALLBACK_MODEL_ID=your_fallback_model_id
 LOG_MODE=info
+# 可选：Goal evaluator 默认复用 MODEL_ID
+GOAL_EVALUATOR_MODEL_ID=
+# 0 表示不限制单次 Runner 的主模型调用次数
+MAX_TURNS=0
+CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=8
 ```
 
 运行：
@@ -561,6 +645,6 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go vet ./...
 GOCACHE=/private/tmp/go-agent-harness-go-cache go test -race ./...
 ```
 
-## 下一步
+## 课程完成状态
 
-下一课是新版 **s17 Goal Loop**。当前只保留 `internal/goal/` 占位，不实现自动目标评估或续轮逻辑。
+新版 s01–s17 主线已全部实现。后续扩展应继续复用当前 Session、Runner、Hook 和协议边界，避免为新能力复制第二套 Agent Loop。
