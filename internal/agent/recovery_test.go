@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -183,5 +184,40 @@ func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
 	secondRequest := model.requests[1].Messages
 	if len(secondRequest) == 0 || secondRequest[len(secondRequest)-1].Content != "[Goal still active] continue" {
 		t.Fatalf("Stop feedback was not appended: %#v", secondRequest)
+	}
+}
+
+func TestRunnerReturnsControlAtGlobalTurnLimit(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+
+	model := &scriptedModel{results: []scriptedModelResult{
+		{response: ModelResponse{
+			Message: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
+				Type: protocol.BlockToolUse, ToolUseID: "tool_1", ToolName: "echo", Input: map[string]any{"text": "work"},
+			}}},
+			Usage: TokenUsage{InputTokens: 3, OutputTokens: 2},
+		}},
+	}}
+	registry := NewRegistry()
+	registry.Register(ToolSpec{Name: "echo"}, func(context.Context, any) (string, error) { return "done", nil })
+	runner := NewRunner(model, registry, nil, "system", WithMaxTurns(1))
+	defer runner.Close()
+
+	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stop.Action != hooks.StopLimit || !strings.Contains(result.Stop.Reason, "max_turns") || len(model.requests) != 1 {
+		t.Fatalf("unexpected limited result=%#v requests=%d", result, len(model.requests))
+	}
+	if result.Usage.Total() != 5 {
+		t.Fatalf("unexpected usage: %#v", result.Usage)
 	}
 }

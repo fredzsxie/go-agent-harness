@@ -23,6 +23,7 @@ type recordingSession struct {
 	interactive bool
 	ready       chan struct{}
 	background  bool
+	totalTokens int64
 }
 
 type lockedBuffer struct {
@@ -71,6 +72,11 @@ func (s *recordingSession) HasBackgroundResults() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.background
+}
+func (s *recordingSession) TotalTokens() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.totalTokens
 }
 
 func TestTeamEventsRetryBusySessionAndStartLeadTurn(t *testing.T) {

@@ -103,3 +103,17 @@ func TestWorkflowInstructionsRequireWorkflowTool(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilderAddsActiveGoalEvidenceInstructions(t *testing.T) {
+	builder := NewBuilder("skills", "/repo")
+	without := builder.Get(Context{})
+	if strings.Contains(without, "Active Goal completion condition") {
+		t.Fatalf("inactive Goal should not affect prompt:\n%s", without)
+	}
+	with := builder.Get(Context{Live: LiveContext{GoalCondition: "go test ./... exits 0"}})
+	for _, want := range []string{"Active Goal completion condition: go test ./... exits 0", "concrete evidence", "independent evaluator"} {
+		if !strings.Contains(with, want) {
+			t.Fatalf("Goal prompt missing %q:\n%s", want, with)
+		}
+	}
+}

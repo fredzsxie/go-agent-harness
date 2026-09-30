@@ -20,6 +20,7 @@ type LiveContext struct {
 	CurrentTime     string   `json:"current_time"`
 	ConnectedMCP    []string `json:"connected_mcp"`
 	ActiveTeammates []string `json:"active_teammates"`
+	GoalCondition   string   `json:"goal_condition"`
 }
 
 // Builder 组装并缓存主 Agent 的 System Prompt；这里只减少字符串组装，API Prompt Cache 由模型供应商处理。
@@ -68,6 +69,7 @@ func (b *Builder) normalize(context Context) Context {
 	context.Live.CurrentTime = strings.TrimSpace(context.Live.CurrentTime)
 	context.Live.ConnectedMCP = normalizedList(context.Live.ConnectedMCP)
 	context.Live.ActiveTeammates = normalizedList(context.Live.ActiveTeammates)
+	context.Live.GoalCondition = strings.TrimSpace(context.Live.GoalCondition)
 	return context
 }
 
@@ -104,6 +106,10 @@ func (b *Builder) assemble(context Context) string {
 	}
 	if len(context.Live.ActiveTeammates) > 0 {
 		sections = append(sections, "Active teammates: "+strings.Join(context.Live.ActiveTeammates, ", "))
+	}
+	if context.Live.GoalCondition != "" {
+		sections = append(sections,
+			"Active Goal completion condition: "+context.Live.GoalCondition+"\nContinue working until the condition is supported by concrete evidence in the conversation. Report command and tool results so the independent evaluator can verify completion.")
 	}
 	// 仅在任务工具实际可用时注入建图规则，避免提示不存在的能力。
 	if hasTool(context.EnabledTools, "create_task") {

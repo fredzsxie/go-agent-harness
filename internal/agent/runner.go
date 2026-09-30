@@ -28,6 +28,7 @@ type Runner struct {
 	fallbackModel string
 	recovery      recoveryPolicy
 	liveContext   func() prompt.LiveContext
+	maxTurns      int
 }
 
 type RunnerOption func(*Runner)
@@ -40,6 +41,15 @@ func WithFallbackModel(model string) RunnerOption {
 // WithLiveContext 注入每轮模型调用前读取的实时运行状态。
 func WithLiveContext(provider func() prompt.LiveContext) RunnerOption {
 	return func(r *Runner) { r.liveContext = provider }
+}
+
+// WithMaxTurns 设置单次 Run 最多允许的主模型调用次数；0 表示不限制。
+func WithMaxTurns(maxTurns int) RunnerOption {
+	return func(r *Runner) {
+		if maxTurns > 0 {
+			r.maxTurns = maxTurns
+		}
+	}
 }
 
 func NewRunner(model Model, registry *Registry, hookManager *hooks.Manager, systemPrompt string, options ...RunnerOption) *Runner {
@@ -150,6 +160,14 @@ func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResul
 		extractionSource = CloneMessages(sessionMessages)
 		// 自动运行时会唤醒 Agent，结果仍在此统一注入消息历史。
 		sessionMessages = injectBackgroundResults(sessionMessages, r.background.Collect())
+		if r.maxTurns > 0 && turnCount >= r.maxTurns {
+			reason := "global max_turns reached; any active goal remains active"
+			logger.Warn("[Goal] %s (%d)", reason, r.maxTurns)
+			return RunResult{
+				Messages: sessionMessages, Usage: usage,
+				Stop: hooks.StopDecision{Action: hooks.StopLimit, Reason: reason},
+			}, nil
+		}
 
 		// 在每次调用LLM之前，都压缩一次上下文
 		prepared, err := r.context.Prepare(ctx, sessionMessages, activeRequest, r.summarizeCompactHistory)

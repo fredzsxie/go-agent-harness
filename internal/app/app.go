@@ -43,6 +43,7 @@ type appSession interface {
 	TrySubmit(context.Context, ...protocol.Message) (agent.RunResult, bool, error)
 	BackgroundReady() <-chan struct{}
 	HasBackgroundResults() bool
+	TotalTokens() int64
 	Close()
 }
 
@@ -110,10 +111,29 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 
 	// Compact 是由 Runner 处理会话状态的控制工具。
 	registerCompactTool(registry)
+	var session *agent.Session
+	goalEvaluator, err := goal.NewPromptEvaluator(model, cfg.GoalEvaluatorModel, 0)
+	if err != nil {
+		panic(err)
+	}
+	goalController, err := goal.New(goal.Config{
+		Evaluator: goalEvaluator,
+		BlockCap:  cfg.GoalStopBlockCap,
+		PendingReason: func() string {
+			backgroundRunning := session != nil && session.HasBackgroundWork()
+			return goalPendingReason(backgroundRunning, teamRuntime.List())
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	// Goal 是同一条 Agent Loop 上的 Stop gate，不创建第二个 Session。
+	hookManager.OnStop(goalController.Stop)
 
 	runner := agent.NewRunnerWithPromptBuilder(
 		model, registry, hookManager, prompt.NewBuilder(skillCatalog, workDir),
 		agent.WithFallbackModel(cfg.FallbackModel),
+		agent.WithMaxTurns(cfg.MaxTurns),
 		agent.WithLiveContext(func() prompt.LiveContext {
 			teammates := teamRuntime.List()
 			names := make([]string, 0, len(teammates))
@@ -123,25 +143,11 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 			return prompt.LiveContext{
 				ConnectedMCP:    mcpManager.Connected(),
 				ActiveTeammates: names,
+				GoalCondition:   activeGoalCondition(goalController),
 			}
 		}),
 	)
-	session := agent.NewSession(runner)
-	goalEvaluator, err := goal.NewPromptEvaluator(model, cfg.Model, 0)
-	if err != nil {
-		panic(err)
-	}
-	goalController, err := goal.New(goal.Config{
-		Evaluator: goalEvaluator,
-		PendingReason: func() string {
-			return goalPendingReason(session.HasBackgroundWork(), teamRuntime.List())
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-	// Goal 是同一条 Agent Loop 上的 Stop gate，不创建第二个 Session。
-	hookManager.OnStop(goalController.Stop)
+	session = agent.NewSession(runner)
 	return &App{
 		session: session,
 		cron:    cronManager,
@@ -242,6 +248,29 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 	if userInput == "" {
 		return false, nil
 	}
+	if a.goal != nil {
+		if userInput == "/goal" {
+			fmt.Fprintln(a.out, a.goal.Status(a.session.TotalTokens()))
+			return false, nil
+		}
+		if strings.HasPrefix(userInput, "/goal ") {
+			condition := strings.TrimSpace(strings.TrimPrefix(userInput, "/goal "))
+			if isGoalClearAlias(condition) {
+				if cleared, ok := a.goal.Clear("cleared by user"); ok {
+					fmt.Fprintf(a.out, "Goal cleared: %s\n", cleared.Condition)
+				} else {
+					fmt.Fprintln(a.out, "No goal set")
+				}
+				return false, nil
+			}
+			if _, err := a.goal.Set(condition, a.session.TotalTokens()); err != nil {
+				fmt.Fprintf(a.out, "[goal] error: %v\n", err)
+				return false, nil
+			}
+			userInput = condition
+		}
+		a.goal.BeginQuery()
+	}
 
 	result, err := a.session.Submit(ctx, protocol.Message{Role: protocol.RoleUser, Content: userInput})
 	if err != nil {
@@ -249,6 +278,26 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 	}
 	printRunResult(a.out, result)
 	return false, nil
+}
+
+func isGoalClearAlias(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "clear", "stop", "off", "reset", "none", "cancel":
+		return true
+	default:
+		return false
+	}
+}
+
+func activeGoalCondition(controller *goal.Controller) string {
+	if controller == nil {
+		return ""
+	}
+	state, ok := controller.Active()
+	if !ok {
+		return ""
+	}
+	return state.Condition
 }
 
 func printRunResult(output io.Writer, result agent.RunResult) {
