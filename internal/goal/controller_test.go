@@ -182,6 +182,46 @@ func TestControllerKeepsGoalActiveOnEvaluatorError(t *testing.T) {
 	}
 }
 
+func TestControllerMarksImpossibleGoalFailed(t *testing.T) {
+	controller, err := New(Config{Evaluator: &sequenceEvaluator{replies: []evaluatorReply{{evaluation: Evaluation{
+		Reason: "required service is unavailable", Impossible: true,
+	}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Set("deploy service", 0); err != nil {
+		t.Fatal(err)
+	}
+	decision := controller.EvaluateAfterTurn(context.Background(), nil, false)
+	if decision.Action != hooks.StopFailed || !strings.Contains(controller.Status(0), "Goal failed") {
+		t.Fatalf("unexpected impossible Goal result: %#v status=%q", decision, controller.Status(0))
+	}
+	if _, active := controller.Active(); active {
+		t.Fatal("failed Goal should no longer be active")
+	}
+}
+
+func TestBeginQueryResetsConsecutiveBlockLimit(t *testing.T) {
+	evaluator := &sequenceEvaluator{replies: []evaluatorReply{
+		{evaluation: Evaluation{Reason: "first"}},
+		{evaluation: Evaluation{Reason: "second"}},
+	}}
+	controller, err := New(Config{Evaluator: evaluator, BlockCap: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Set("done", 0); err != nil {
+		t.Fatal(err)
+	}
+	if decision := controller.EvaluateAfterTurn(context.Background(), nil, false); decision.Action != hooks.StopBlock {
+		t.Fatalf("unexpected first decision: %#v", decision)
+	}
+	controller.BeginQuery()
+	if decision := controller.EvaluateAfterTurn(context.Background(), nil, false); decision.Action != hooks.StopBlock {
+		t.Fatalf("new query should receive a fresh block window: %#v", decision)
+	}
+}
+
 func TestRestoreOnlyRestartsActiveGoal(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.Local)
 	active, err := Restore(Config{Now: func() time.Time { return now }}, []Event{
