@@ -139,6 +139,32 @@ func TestControllerDefersAndStopsAtBlockCap(t *testing.T) {
 	}
 }
 
+func TestControllerStopDefersForPendingRuntimeWork(t *testing.T) {
+	evaluator := &sequenceEvaluator{}
+	controller, err := New(Config{
+		Evaluator: evaluator,
+		PendingReason: func() string {
+			return `teammate "alice" is waiting for approval`
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Set("finish implementation", 0); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := controller.Stop(context.Background(), hooks.StopContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != hooks.StopDefer || !strings.Contains(decision.Reason, "waiting for approval") || len(evaluator.conditions) != 0 {
+		t.Fatalf("pending work should return control without evaluation: %#v", decision)
+	}
+	if _, ok := controller.Active(); !ok {
+		t.Fatal("deferred Goal must remain active")
+	}
+}
+
 func TestControllerKeepsGoalActiveOnEvaluatorError(t *testing.T) {
 	controller, err := New(Config{Evaluator: &sequenceEvaluator{replies: []evaluatorReply{{err: errors.New("offline")}}}})
 	if err != nil {

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -161,11 +160,5 @@ func (a *App) deliverAsyncPending(ctx context.Context, pending *asyncPending) {
 		logger.Info("[AsyncRuntime] delivered background task result(s)")
 	}
 	*pending = asyncPending{}
-	printAsyncResult(a.out, result)
-}
-
-func printAsyncResult(output interface{ Write([]byte) (int, error) }, result agent.RunResult) {
-	if output != nil && result.Output != "" {
-		fmt.Fprintln(output, result.Output)
-	}
+	printRunResult(a.out, result)
 }

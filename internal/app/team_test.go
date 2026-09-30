@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/protocol"
 	"go-agent-harness/internal/team"
@@ -134,6 +135,42 @@ func TestBackgroundCompletionStartsAutomaticTurn(t *testing.T) {
 	session.mu.Unlock()
 	if interactive || inputs != 0 {
 		t.Fatalf("background wake should be non-interactive without synthetic input: interactive=%v inputs=%d", interactive, inputs)
+	}
+}
+
+func TestGoalPendingReasonDistinguishesRuntimeStates(t *testing.T) {
+	tests := []struct {
+		name       string
+		background bool
+		teammates  []team.TeammateInfo
+		want       string
+	}{
+		{name: "none"},
+		{name: "background", background: true, want: "background work is still running"},
+		{name: "working", teammates: []team.TeammateInfo{{Name: "alice", Status: team.TeammateWorking}}, want: `teammate "alice" is still working`},
+		{name: "stopping", teammates: []team.TeammateInfo{{Name: "alice", Status: team.TeammateStopping}}, want: `teammate "alice" is still stopping`},
+		{name: "idle", teammates: []team.TeammateInfo{{Name: "alice", Status: team.TeammateIdle}}},
+		{name: "approval takes priority", background: true, teammates: []team.TeammateInfo{{Name: "alice", Status: team.TeammateWaitingApproval}}, want: `teammate "alice" is waiting for approval`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := goalPendingReason(test.background, test.teammates); got != test.want {
+				t.Fatalf("goalPendingReason() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPrintRunResultIncludesTerminalGoalDecision(t *testing.T) {
+	output := &bytes.Buffer{}
+	printRunResult(output, agent.RunResult{
+		Output: "main response",
+		Stop:   hooks.StopDecision{Action: hooks.StopDefer, Reason: "background work is still running"},
+	})
+	for _, want := range []string{"main response", "[goal] defer: background work is still running"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q: %q", want, output.String())
+		}
 	}
 }
 

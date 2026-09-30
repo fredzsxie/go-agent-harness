@@ -111,6 +111,11 @@ func (r *Runner) HasBackgroundResults() bool {
 	return r.background.HasReady()
 }
 
+// HasBackgroundWork 判断是否存在尚未产出最终结果的后台命令。
+func (r *Runner) HasBackgroundWork() bool {
+	return r.background.HasRunning()
+}
+
 func (r *Runner) Run(ctx context.Context, messages []protocol.Message) (RunResult, error) {
 	sessionMessages := CloneMessages(messages)
 	tokenBaseline := tokenBaselineFromContext(ctx)

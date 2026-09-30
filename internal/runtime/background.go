@@ -150,6 +150,18 @@ func (m *BackgroundManager) HasReady() bool {
 	return len(m.ready) > 0
 }
 
+// HasRunning 区分“仍在执行”和“已经完成但尚未收集”，供 Goal Stop gate 延后评估。
+func (m *BackgroundManager) HasRunning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, current := range m.tasks {
+		if current.status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
 // Collect 一次性取走已完成任务，并转换成不复用原 tool_use_id 的独立通知文本。
 func (m *BackgroundManager) Collect() []string {
 	m.mu.Lock()

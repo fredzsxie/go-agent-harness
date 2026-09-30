@@ -16,6 +16,7 @@ type sessionRunner interface {
 type backgroundEvents interface {
 	BackgroundReady() <-chan struct{}
 	HasBackgroundResults() bool
+	HasBackgroundWork() bool
 }
 
 // Session 持有单个 Agent 的消息历史，并串行执行用户与 Cron 输入。
@@ -69,6 +70,14 @@ func (s *Session) BackgroundReady() <-chan struct{} {
 func (s *Session) HasBackgroundResults() bool {
 	if source, ok := s.runner.(backgroundEvents); ok {
 		return source.HasBackgroundResults()
+	}
+	return false
+}
+
+// HasBackgroundWork 转发 Runner 的后台运行状态；此方法不获取 Session 锁，Stop Hook 可安全调用。
+func (s *Session) HasBackgroundWork() bool {
+	if source, ok := s.runner.(backgroundEvents); ok {
+		return source.HasBackgroundWork()
 	}
 	return false
 }

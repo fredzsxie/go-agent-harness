@@ -20,6 +20,7 @@ type Controller struct {
 	evaluator         Evaluator
 	blockCap          int
 	now               func() time.Time
+	pendingReason     func() string
 	active            *State
 	lastStatus        *Event
 	events            []Event
@@ -38,10 +39,11 @@ func New(config Config) (*Controller, error) {
 		config.Now = time.Now
 	}
 	return &Controller{
-		evaluator: config.Evaluator,
-		blockCap:  config.BlockCap,
-		now:       config.Now,
-		events:    make([]Event, 0, 8),
+		evaluator:     config.Evaluator,
+		blockCap:      config.BlockCap,
+		now:           config.Now,
+		pendingReason: config.PendingReason,
+		events:        make([]Event, 0, 8),
 	}, nil
 }
 
@@ -134,14 +136,23 @@ func (c *Controller) Events() []Event {
 // EvaluateAfterTurn 在锁外调用 evaluator，避免慢模型请求阻塞 /goal 查询或清理。
 // generation 防止旧评估结果覆盖在请求期间被替换的新 Goal。
 func (c *Controller) EvaluateAfterTurn(ctx context.Context, messages []protocol.Message, pendingWork bool) hooks.StopDecision {
+	pendingReason := ""
+	if pendingWork {
+		pendingReason = "background work is still running"
+	}
+	return c.evaluateAfterTurn(ctx, messages, pendingReason)
+}
+
+func (c *Controller) evaluateAfterTurn(ctx context.Context, messages []protocol.Message, pendingReason string) hooks.StopDecision {
 	c.mu.Lock()
 	if c.active == nil {
 		c.mu.Unlock()
 		return hooks.StopDecision{Action: hooks.StopAllow}
 	}
-	if pendingWork {
+	if pendingReason != "" {
 		c.mu.Unlock()
-		return hooks.StopDecision{Action: hooks.StopDefer, Reason: "background work is still running"}
+		logger.Info("[Goal] evaluation deferred: %s", pendingReason)
+		return hooks.StopDecision{Action: hooks.StopDefer, Reason: pendingReason}
 	}
 	condition := c.active.Condition
 	generation := c.generation
@@ -158,7 +169,11 @@ func (c *Controller) EvaluateAfterTurn(ctx context.Context, messages []protocol.
 
 // Stop 将 Goal 评估接到通用 Stop Hook，并为 block 决策生成下一轮可直接使用的反馈。
 func (c *Controller) Stop(ctx context.Context, input hooks.StopContext) (hooks.StopDecision, error) {
-	decision := c.EvaluateAfterTurn(ctx, input.Messages, false)
+	pendingReason := ""
+	if c.pendingReason != nil {
+		pendingReason = strings.TrimSpace(c.pendingReason())
+	}
+	decision := c.evaluateAfterTurn(ctx, input.Messages, pendingReason)
 	if decision.Action != hooks.StopBlock {
 		return decision, nil
 	}

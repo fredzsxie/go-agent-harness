@@ -48,7 +48,8 @@ type Event struct {
 }
 
 type Config struct {
-	Evaluator Evaluator
-	BlockCap  int
-	Now       func() time.Time
+	Evaluator     Evaluator
+	BlockCap      int
+	Now           func() time.Time
+	PendingReason func() string
 }

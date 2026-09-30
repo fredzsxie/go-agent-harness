@@ -13,6 +13,7 @@ import (
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/goal"
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/mcp"
 	llmmodel "go-agent-harness/internal/model"
@@ -58,16 +59,6 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 	mcpManager := mcp.New(registry)
 	registerMCPTool(registry, mcpManager)
 	hookManager := newDefaultHooks(mcpManager)
-	goalEvaluator, err := goal.NewPromptEvaluator(model, cfg.Model, 0)
-	if err != nil {
-		panic(err)
-	}
-	goalController, err := goal.New(goal.Config{Evaluator: goalEvaluator})
-	if err != nil {
-		panic(err)
-	}
-	// Goal 是同一条 Agent Loop 上的 Stop gate，不创建第二个 Session。
-	hookManager.OnStop(goalController.Stop)
 
 	// TodoWrite 只维护当前 Session 的临时计划。
 	todoManager := todo.NewManager(out)
@@ -135,8 +126,24 @@ func New(cfg config.LLMConfig, in io.Reader, out io.Writer) *App {
 			}
 		}),
 	)
+	session := agent.NewSession(runner)
+	goalEvaluator, err := goal.NewPromptEvaluator(model, cfg.Model, 0)
+	if err != nil {
+		panic(err)
+	}
+	goalController, err := goal.New(goal.Config{
+		Evaluator: goalEvaluator,
+		PendingReason: func() string {
+			return goalPendingReason(session.HasBackgroundWork(), teamRuntime.List())
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	// Goal 是同一条 Agent Loop 上的 Stop gate，不创建第二个 Session。
+	hookManager.OnStop(goalController.Stop)
 	return &App{
-		session: agent.NewSession(runner),
+		session: session,
 		cron:    cronManager,
 		team:    teamRuntime,
 		goal:    goalController,
@@ -240,10 +247,37 @@ func (a *App) processInput(ctx context.Context, rawInput string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if result.Output != "" {
-		fmt.Fprintln(a.out, result.Output)
-	}
+	printRunResult(a.out, result)
 	return false, nil
+}
+
+func printRunResult(output io.Writer, result agent.RunResult) {
+	if output == nil {
+		return
+	}
+	if result.Output != "" {
+		fmt.Fprintln(output, result.Output)
+	}
+	if result.Stop.Action != "" && result.Stop.Action != hooks.StopAllow {
+		fmt.Fprintf(output, "[goal] %s: %s\n", result.Stop.Action, result.Stop.Reason)
+	}
+}
+
+func goalPendingReason(backgroundRunning bool, teammates []team.TeammateInfo) string {
+	for _, teammate := range teammates {
+		if teammate.Status == team.TeammateWaitingApproval {
+			return fmt.Sprintf("teammate %q is waiting for approval", teammate.Name)
+		}
+	}
+	if backgroundRunning {
+		return "background work is still running"
+	}
+	for _, teammate := range teammates {
+		if teammate.Status == team.TeammateWorking || teammate.Status == team.TeammateStopping {
+			return fmt.Sprintf("teammate %q is still %s", teammate.Name, teammate.Status)
+		}
+	}
+	return ""
 }
 
 func previewText(value string, limit int) string {

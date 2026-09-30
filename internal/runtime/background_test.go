@@ -75,12 +75,18 @@ func TestManagerSignalsCompletedTask(t *testing.T) {
 	if _, err := manager.Start("work", func(result string) { completed <- result }); err != nil {
 		t.Fatal(err)
 	}
+	if !manager.HasRunning() {
+		t.Fatal("started task should be reported as running")
+	}
 	close(release)
 
 	select {
 	case <-manager.Ready():
 	case <-time.After(time.Second):
 		t.Fatal("background completion did not signal readiness")
+	}
+	if manager.HasRunning() {
+		t.Fatal("completed task should no longer be reported as running")
 	}
 	select {
 	case result := <-completed:
