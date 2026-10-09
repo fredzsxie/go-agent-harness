@@ -31,10 +31,10 @@ description: |
 
 1. 先读当前仓库，再改代码。
 2. 优先复用当前 Go 项目的扩展点，不直接把参考版的大类或大文件搬进来。
-3. 主循环相关逻辑优先放在 `loop/`。
+3. 主循环相关逻辑优先放在 `internal/agent/`。
 4. 组合与装配优先放在 `internal/app/`。
 5. 具体能力优先放在对应的 `internal/<feature>/` 包。
-6. 工具注册走 `loop.Registry`，不要在 `Runner` 里塞特判。
+6. 工具注册走 `tool.Registry`，不要在 `Runner` 里塞特判。
 7. 除非课程明确要求，否则不要把主 agent 的能力自动扩散到 subagent。
 8. 不改无关逻辑，不顺手做大重构。
 
@@ -43,10 +43,12 @@ description: |
 优先按下面的结构集成能力：
 
 - `main.go`：极薄入口
-- `loop/runner.go`：agent loop
-- `loop/registry.go`：工具注册与分发
-- `loop/tooluse.go`：tool_use 执行流程
-- `internal/app/`：默认 registry、hooks、runner 装配
+- `internal/agent/runner.go`：agent loop
+- `internal/tool/registry.go`：工具注册与分发
+- `internal/agent/tool_executor.go`：tool_use 执行流程
+- `internal/app/bootstrap.go`：依赖与工具池装配
+- `internal/llm/`、`internal/protocol/`：模型与消息协议，不依赖业务模块
+- `internal/agentctx/`：Prompt、Compact、Memory 生命周期
 - `internal/prompt/`：system prompt 组装
 - `internal/permission/`：权限闸门
 - `internal/hooks/`：hook pipeline
@@ -90,11 +92,11 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go test ./...
 
 ## 常见实现判断
 
-- 新工具：优先改 `internal/app/registry.go` 和对应 feature package。
+- 新工具：schema 与 handler 放在所属 feature package 的 `tools.go` / `register.go`；在 `internal/app/bootstrap.go` 选择注册。
 - 新 prompt 片段：优先改 `internal/prompt/`，不要在 `runner.go` 里硬编码更多文本。
 - 新运行时状态：优先建 `internal/<feature>/manager` 风格对象。
-- 新 tool_use 执行编排：优先改 `loop/tooluse.go` 或 `loop/registry.go`。
-- 新主循环控制：只在确实影响 loop 终止、重试、压缩、恢复时修改 `loop/runner.go`。
+- 新 tool_use 执行编排：优先改 `internal/agent/tool_executor.go` 或 `internal/tool/registry.go`。
+- 新主循环控制：只在确实影响 loop 终止、重试、压缩、恢复时修改 `internal/agent/runner.go`。
 
 ## 推荐检查顺序
 
@@ -102,10 +104,10 @@ GOCACHE=/private/tmp/go-agent-harness-go-cache go test ./...
 
 1. `README.md`
 2. `main.go`
-3. `internal/app/app.go`
+3. `internal/app/bootstrap.go`
 4. `internal/app/registry.go`
-5. `loop/runner.go`
-6. `loop/tooluse.go`
+5. `internal/agent/runner.go`
+6. `internal/agent/tool_executor.go`
 7. 目标功能对应的 `internal/<feature>/`
 
 ## 参考映射

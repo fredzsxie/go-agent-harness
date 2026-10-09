@@ -16,19 +16,19 @@ Harness = tools + knowledge + context + permissions + runtime
 
 ## 当前进度
 
-当前学习进度到 **s17 Goal Loop**。s01–s17 的主体能力已经接入同一条 Go 版 Agent Loop，并对齐了新版课程中影响正确性的主要边界。
+当前学习进度到 **s17 Goal Loop**。s01–s17 的主体能力已经接入同一条 Go 版 Agent Loop；具体边界与 Go 版实现差异见下方课程对照文档。
 
 | 章节 | 主题 | 状态 | Go 项目落点 |
 |---|---|---|---|
 | s01 | Agent Loop | 已完成 | `internal/agent/runner.go`, `internal/model/anthropic.go` |
-| s02 | Tool Use | 已完成 | `internal/agent/registry.go`, `internal/tool/builtin/` |
+| s02 | Tool Use | 已完成 | `internal/tool/registry.go`, `internal/tool/builtin/` |
 | s03 | Permission | 已完成 | `internal/permission/` |
 | s04 | Hooks | 已完成 | `internal/hooks/`, `internal/agent/tool_executor.go` |
 | s05 | TodoWrite | 已完成 | `internal/todo/` |
 | s06 | Subagent | 已完成 | `internal/subagent/` |
 | s07 | Skill Loading | 已完成 | `internal/skill/`, `internal/prompt/` |
-| s08 | Context Compact | 已完成 | `internal/compact/`, `internal/agent/runner.go` |
-| s09 | Memory | 已完成 | `internal/memory/`, `internal/agent/runner.go` |
+| s08 | Context Compact | 已完成 | `internal/compact/`, `internal/agentctx/` |
+| s09 | Memory | 已完成 | `internal/memory/`, `internal/agentctx/` |
 | s10 | Task System | 已完成 | `internal/task/`, `.tasks/` |
 | s11 | Background Tasks | 已完成 | `internal/runtime/`, `internal/agent/runner.go` |
 | s12 | Cron Scheduler | 已完成 | `internal/runtime/cron.go`, `internal/app/app.go` |
@@ -39,6 +39,17 @@ Harness = tools + knowledge + context + permissions + runtime
 | s17 | Goal Loop | 已完成 | `internal/goal/`, `internal/hooks/`, `internal/app/` |
 
 详细的代码映射、验收边界和后续计划见 [learn-claude-code-go-reference.md](./learn-claude-code-go-reference.md)。
+
+## 建议阅读顺序
+
+先读 [课程与代码对照](./learn-claude-code-go-reference.md)，再从以下入口追踪一轮请求：
+
+1. `internal/app/bootstrap.go`：统一注入模型、工作区、权限和各角色的工具池。
+2. `internal/agent/session.go → runner.go → worker.go → tool_executor.go`：输入串行化、循环、单轮调用、工具回填。
+3. `internal/protocol/`、`internal/llm/`、`internal/tool/`：共享协议，不依赖业务功能。
+4. 按 s01–s17 映射阅读功能模块；优先看入口注释和相邻的 `*_test.go`。
+
+构造应用时可通过 `app.NewWithConfig` 注入 `WorkDir / Model / In / Out`，不需要修改进程工作目录或连接真实模型。初始化错误由调用方处理，不在功能包中退出程序。
 
 ## 已实现的核心行为
 
@@ -262,7 +273,7 @@ messages := []protocol.Message{
 - 连接后动态加入的 `mcp__{server}__{tool}`
 - `workflow`，运行 Host 注册的固定编排并支持 journal 恢复
 
-所有工具通过 `agent.Registry` 注册，Runner 不关心具体工具来源。Registry 在每轮模型调用前生成最新工具列表，因此 `connect_mcp` 发现的工具会从下一轮开始生效。
+所有工具通过 `tool.Registry` 注册；schema 与 handler 放在各功能包的 `tools.go` / `register.go`，`app/bootstrap.go` 只负责选择并组合能力。Runner 不关心普通工具的具体来源。Registry 在每轮模型调用前生成最新工具列表，因此 `connect_mcp` 发现的工具会从下一轮开始生效。
 
 ### 权限与 Hooks
 
@@ -396,11 +407,11 @@ LLM 恢复策略：
 |---|---|
 | HTTP 429 | 最多 3 次指数退避重试，保持主模型 |
 | HTTP 529 | 指数退避；连续两次后可切换 `FALLBACK_MODEL_ID` |
-| `stop_reason=max_tokens` | 8000 提升到 16000；仍截断时最多进行两次断点续写 |
+| `stop_reason=max_tokens` | 8000 提升到 16000；主 Runner 的纯文本最多续写两次，残缺工具调用则报错返回 |
 | prompt too long | 执行一次 reactive compact 后重试 |
 | Context 取消 | 立即停止，不重试 |
 
-`max_tokens` 截断时即使响应已包含 `tool_use`，Harness 也不会执行可能不完整的参数，而是先恢复完整响应。
+`max_tokens` 截断时即使响应已包含 `tool_use`，Harness 也不会执行可能不完整的参数，而是先恢复完整响应。Subagent / Teammate 通过 Worker 从同一份输入扩容重试一次；再次截断就返回错误，不把残缺片段写入历史。
 
 ### Workflow Runtime
 
@@ -451,7 +462,7 @@ main Agent tool_use: workflow
 | `Log` | 记录 Workflow 进度，不写入普通会话历史 |
 | `Workflow` | 内联运行另一个已注册 Workflow，最多嵌套一层 |
 
-Workflow agent 复用 `agent.Model`，但不会获得 Bash、文件、MCP、Subagent 或其他工具，只能读取 Script 通过 prompt 明确传入的内容。带 Schema 的输出会先解析并校验；失败时仅追加一次 JSON 提示重试，第二次仍不合法则结束本次 Workflow。当前 Schema 子集支持 object、array、string、boolean、number、required、properties、items、enum 和 `additionalProperties`。
+Workflow agent 复用 `llm.Model`，但不会获得 Bash、文件、MCP、Subagent 或其他工具，只能读取 Script 通过 prompt 明确传入的内容。带 Schema 的输出会先解析并校验；失败时仅追加一次 JSON 提示重试，第二次仍不合法则结束本次 Workflow。当前 Schema 子集支持 object、array、string、boolean、number、required、properties、items、enum 和 `additionalProperties`。
 
 默认每个 run 最多调用 1000 次 agent，最多同时运行 8 次模型请求。可通过正整数 `args.budget` 设置共享 token budget；嵌套 Workflow 共享调用次数、并发限制、预算、journal 和 Task usage。`review-changes` 是当前内置示例，会对 correctness、security、performance、style 四个维度执行 audit → verify pipeline，并按严重程度汇总确认的问题。
 
@@ -590,11 +601,13 @@ go-agent-harness/
 └── internal/
     ├── config/       # 环境与模型配置
     ├── app/          # CLI、统一自动事件运行时与依赖装配
-    ├── agent/        # Session、Agent Loop、恢复、Registry 与 ToolExecutor
-    ├── protocol/     # Message 与 ContentBlock 协议
-    ├── model/        # Model 接口的 Anthropic 适配
+    ├── agent/        # Session、Agent Loop、恢复与 ToolExecutor
+    ├── protocol/     # Message、ContentBlock 与消息快照
+    ├── llm/          # 供应商无关 Model 接口、Request / Response / Usage
+    ├── model/        # llm.Model 的 Anthropic 适配
     ├── agentctx/     # Prompt、Compact 与 Memory 编排
-    ├── tool/builtin/ # Shell 与文件工具
+    ├── tool/         # Spec、Handler、并发安全 Registry
+    │   └── builtin/  # 绑定工作区的 Shell 与文件工具
     ├── hooks/        # s04
     ├── permission/   # s03
     ├── todo/         # s05
