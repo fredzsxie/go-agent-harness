@@ -1,4 +1,5 @@
-// Package worktree 管理与 Task 绑定的 Git Worktree 隔离工作区。
+// Package worktree 管理 s13 中与 Task 绑定的 Git Worktree。
+// Worktree 隔离分支与工作目录，不隔离进程权限；Bash 仍必须经过权限闸门。
 package worktree
 
 import (
@@ -31,7 +32,7 @@ var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 type Config struct {
 	WorkDir     string
 	WorktreeDir string
-	Tasks       *task.Manager
+	Tasks       TaskBindings
 	InUse       func(path string) bool
 }
 
@@ -39,7 +40,7 @@ type Config struct {
 type Manager struct {
 	root    *workspace.Resolver
 	dir     string
-	tasks   *task.Manager
+	tasks   TaskBindings
 	inUse   func(string) bool
 	initErr error
 	mu      sync.Mutex

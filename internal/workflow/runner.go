@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -27,11 +27,11 @@ type AgentRunner interface {
 
 // ModelRunner 复用 Host 的模型接口，但不向 Workflow agent 暴露任何工具。
 type ModelRunner struct {
-	model     agent.Model
+	model     llm.Model
 	maxTokens int64
 }
 
-func NewModelRunner(model agent.Model, maxTokens int64) *ModelRunner {
+func NewModelRunner(model llm.Model, maxTokens int64) *ModelRunner {
 	if maxTokens <= 0 {
 		maxTokens = defaultWorkflowMaxTokens
 	}
@@ -50,7 +50,7 @@ func (r *ModelRunner) Run(ctx context.Context, prompt string, schema map[string]
 		}
 		request += "\n\nReturn only valid JSON matching this schema:\n" + string(rawSchema)
 	}
-	response, err := r.model.Complete(ctx, agent.ModelRequest{
+	response, err := r.model.Complete(ctx, llm.Request{
 		System:    workflowAgentSystemPrompt,
 		Messages:  []protocol.Message{{Role: protocol.RoleUser, Content: request}},
 		MaxTokens: r.maxTokens,

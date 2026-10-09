@@ -32,10 +32,6 @@ var blockedCommands = []string{
 	"kill -9 -1",
 }
 
-func RunBash(ctx context.Context, input any) (string, error) {
-	return defaultTools.RunBash(ctx, input)
-}
-
 func (t *Tools) RunBash(ctx context.Context, input any) (string, error) {
 	command, _ := input.(map[string]any)["command"].(string)
 	if command == "" {

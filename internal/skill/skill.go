@@ -33,15 +33,19 @@ type Manager struct {
 	order   []string
 }
 
-func New() *Manager {
+// New 在指定工作区扫描一次目录；s07 只把名称与简述放入 Prompt，正文由工具按需返回。
+func New(resolver *workspace.Resolver) (*Manager, error) {
+	if resolver == nil {
+		return nil, fmt.Errorf("skill workspace is required")
+	}
 	manager := &Manager{
 		entries: make(map[string]Entry),
 		order:   make([]string, 0, 8),
 	}
-	if err := manager.scan(filepath.Join(workspace.Root(), skillsDirName)); err != nil {
-		panic(err)
+	if err := manager.scan(filepath.Join(resolver.Root(), skillsDirName)); err != nil {
+		return nil, err
 	}
-	return manager
+	return manager, nil
 }
 
 func (m *Manager) ListSkills() string {
@@ -57,6 +61,7 @@ func (m *Manager) ListSkills() string {
 	return strings.Join(lines, "\n")
 }
 
+// RunLoad 只接受启动时扫描到的技能名称，不将模型参数直接解释成磁盘路径。
 func (m *Manager) RunLoad(_ context.Context, input any) (string, error) {
 	payload, ok := input.(map[string]any)
 	if !ok {

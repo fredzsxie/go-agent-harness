@@ -1,59 +1,44 @@
-// Package permission 实现工具调用前的三段式权限闸门，
-// 将危险命令拦截、规则匹配和人工确认集中在一个入口。
+// Package permission 实现 s03 的执行前权限判断，通过 s04 PreToolUse 接入。
+// 本包不读取终端；审批由宿主注入，自动回合不能竞争前台输入。
 package permission
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strings"
-
-	"go-agent-harness/internal/workspace"
 )
 
 type interactionKey struct{}
 
-// WithInteractive 把当前 Agent turn 是否可以请求终端审批绑定到 Context。
+// WithInteractive 让 s12/s15 自动回合显式禁用人工审批。
 func WithInteractive(ctx context.Context, interactive bool) context.Context {
 	return context.WithValue(ctx, interactionKey{}, interactive)
 }
-
-// IsInteractive 默认将用户主动请求视为交互式，自动回合需显式关闭。
 func IsInteractive(ctx context.Context) bool {
 	interactive, configured := ctx.Value(interactionKey{}).(bool)
 	return !configured || interactive
 }
 
-/*
-Three gates inserted before tool execution:
+// Approver 只负责交互，不改变权限规则；false 或未配置都表示拒绝。
+type Approver func(toolName string, args map[string]any, reason string) bool
+type PathResolver func(string) (string, error)
 
-    Gate 1: Hard deny list (rm -rf /, sudo, ...)
-    Gate 2: Rule matching (write outside workspace? destructive cmd?)
-    Gate 3: User approval (pause and wait for confirmation)
-
-    +-------+    +--------+    +--------+    +--------+    +------+
-    | Tool  | -> | Gate 1 | -> | Gate 2 | -> | Gate 3 | -> | Exec |
-    | call  |    | deny?  |    | match? |    | allow? |    |      |
-    +-------+    +--------+    +--------+    +--------+    +------+
-         |            |             |             |
-         v            v             v             v
-      (normal)     (blocked)    (ask user)   (user says no?)
-*/
-
-// Gate 1：硬拒绝列表，任何情况下都不允许执行。
-var DenyList = []string{
-	"rm -rf /",
-	"sudo",
-	"shutdown",
-	"reboot",
-	"mkfs",
-	"dd if=",
-	"> /dev/sda",
+// Authorizer 绑定当前 Agent 的工作区和审批入口；Teammate 可注入随 assignment 变化的解析函数。
+type Authorizer struct {
+	resolve PathResolver
+	approve Approver
 }
 
+func New(resolve PathResolver, approve Approver) *Authorizer {
+	return &Authorizer{resolve: resolve, approve: approve}
+}
+
+// denyList 是教学用硬拒绝规则，不是完整 Shell 沙箱。
+// s15 的宿主策略更保守：所有 Bash 命令都需要前台用户明确批准。
+var denyList = []string{"rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"}
+
 func CheckDenyList(command string) string {
-	for _, deny := range DenyList {
+	for _, deny := range denyList {
 		if strings.Contains(command, deny) {
 			return fmt.Sprintf("Blocked: '%s' is on the deny list", deny)
 		}
@@ -61,98 +46,9 @@ func CheckDenyList(command string) string {
 	return ""
 }
 
-// Gate 2：根据工具参数匹配需要人工审批的规则。
-type Rule struct {
-	Tools   []string
-	Check   func(args map[string]any) bool
-	Message string
-}
-
-var PermissionRules = []Rule{
-	{
-		Tools: []string{"write_file", "edit_file"},
-		Check: func(args map[string]any) bool {
-			path, _ := args["path"].(string)
-			return pathEscapesWorkspace(path)
-		},
-		Message: "Writing outside workspace",
-	},
-	{
-		Tools: []string{"bash"},
-		Check: func(args map[string]any) bool {
-			command, _ := args["command"].(string)
-			return strings.Contains(command, "rm ") ||
-				strings.Contains(command, "> /etc/") ||
-				strings.Contains(command, "chmod 777")
-		},
-		Message: "Potentially destructive command",
-	},
-}
-
-func CheckRules(toolName string, args map[string]any) string {
-	for _, rule := range PermissionRules {
-		if toolMatches(toolName, rule.Tools) && rule.Check(args) {
-			return rule.Message
-		}
-	}
-	return ""
-}
-
-func toolMatches(toolName string, tools []string) bool {
-	for _, tool := range tools {
-		if tool == toolName {
-			return true
-		}
-	}
-	return false
-}
-
-func pathEscapesWorkspace(path string) bool {
-	if strings.TrimSpace(path) == "" {
-		return false
-	}
-	_, err := workspace.Resolve(path)
-	return err != nil
-}
-
-// Gate 3：规则命中后等待用户确认。
-func AskUser(toolName string, args map[string]any, reason string) string {
-	fmt.Printf("\n⚠  %s\n", reason)
-	fmt.Printf("   Tool: %s(%v)\n", toolName, args)
-	fmt.Print("   Allow? [y/N] ")
-
-	reader := bufio.NewReader(os.Stdin)
-	choice, _ := reader.ReadString('\n')
-	choice = strings.ToLower(strings.TrimSpace(choice))
-	if choice == "y" || choice == "yes" {
-		return "allow"
-	}
-	return "deny"
-}
-
-// Authorize 在工具执行前依次通过三道权限闸门。
-func Authorize(toolName string, args map[string]any) error {
-	return authorize(toolName, args, true)
-}
-
-// AuthorizeNonInteractive 对定时触发的 Agent turn 禁止任何需要终端确认的操作。
-func AuthorizeNonInteractive(toolName string, args map[string]any) error {
-	return authorize(toolName, args, false)
-}
-
-// AuthorizeExternal 对未被 Host Policy 放行的外部工具执行统一确认。
-func AuthorizeExternal(toolName string, args map[string]any, interactive bool) error {
-	const reason = "External tool requires approval"
-	if !interactive {
-		return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
-	}
-	if AskUser(toolName, args, reason) == "deny" {
-		return fmt.Errorf("permission denied: %s", reason)
-	}
-	return nil
-}
-
-func authorize(toolName string, args map[string]any, interactive bool) error {
+// Authorize 的顺序固定为参数与硬拒绝检查、工作区规则、必要时申请批准。
+// 文件工具自身也校验路径；权限批准不能扩大文件工具的工作区边界。
+func (a *Authorizer) Authorize(toolName string, args map[string]any, interactive bool) error {
 	if toolName == "bash" {
 		command, ok := args["command"].(string)
 		if !ok || strings.TrimSpace(command) == "" {
@@ -161,30 +57,40 @@ func authorize(toolName string, args map[string]any, interactive bool) error {
 		if reason := CheckDenyList(command); reason != "" {
 			return fmt.Errorf("%s", reason)
 		}
-		const reason = "Shell command requires approval"
 		if !interactive {
 			return fmt.Errorf("permission denied: asynchronous turns cannot request shell approval")
 		}
-		if AskUser(toolName, args, reason) == "deny" {
-			return fmt.Errorf("permission denied: %s", reason)
-		}
-		return nil
+		return a.request(toolName, args, "Shell command requires approval")
 	}
-
-	if reason := CheckRules(toolName, args); reason != "" {
-		if !interactive {
-			return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
+	if toolName == "write_file" || toolName == "edit_file" {
+		path, _ := args["path"].(string)
+		if strings.TrimSpace(path) == "" {
+			return nil
+		} // 参数缺失交给工具的输入校验报告。
+		if a == nil || a.resolve == nil {
+			return fmt.Errorf("permission denied: workspace resolver is not configured")
 		}
-		decision := AskUser(toolName, args, reason)
-		if decision == "deny" {
-			return fmt.Errorf("permission denied: %s", reason)
+		if _, err := a.resolve(path); err != nil {
+			if !interactive {
+				return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
+			}
+			return a.request(toolName, args, "Writing outside workspace")
 		}
 	}
-
 	return nil
 }
 
-// CheckPermission 作为 s03 的布尔教学辅助方法保留。
-func CheckPermission(toolName string, args map[string]any) bool {
-	return Authorize(toolName, args) == nil
+// AuthorizeExternal 仅用于宿主未明确放行的 s14 外部工具，Server annotations 不构成授权。
+func (a *Authorizer) AuthorizeExternal(toolName string, args map[string]any, interactive bool) error {
+	if !interactive {
+		return fmt.Errorf("permission denied: non-interactive turns cannot request interactive approval")
+	}
+	return a.request(toolName, args, "External tool requires approval")
+}
+
+func (a *Authorizer) request(toolName string, args map[string]any, reason string) error {
+	if a == nil || a.approve == nil || !a.approve(toolName, args, reason) {
+		return fmt.Errorf("permission denied: %s", reason)
+	}
+	return nil
 }

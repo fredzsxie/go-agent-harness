@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/protocol"
 )
@@ -59,7 +58,7 @@ func (p *teammate) work() loopState {
 		return loopWork
 	}
 
-	summary := strings.TrimSpace(agent.LatestAssistantText(p.messages))
+	summary := strings.TrimSpace(protocol.LatestAssistantText(p.messages))
 	p.runtime.mu.Lock()
 	gate := p.gate
 	p.runtime.mu.Unlock()

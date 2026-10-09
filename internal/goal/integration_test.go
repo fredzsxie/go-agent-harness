@@ -4,29 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/agentctx"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
+	"go-agent-harness/internal/tool"
 )
 
 type modelQueue struct {
 	mu        sync.Mutex
-	responses []agent.ModelResponse
-	requests  []agent.ModelRequest
+	responses []llm.Response
+	requests  []llm.Request
 }
 
-func (m *modelQueue) Complete(_ context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *modelQueue) Complete(_ context.Context, request llm.Request) (llm.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, request)
 	if len(m.responses) == 0 {
-		return agent.ModelResponse{}, errors.New("unexpected model call")
+		return llm.Response{}, errors.New("unexpected model call")
 	}
 	response := m.responses[0]
 	m.responses = m.responses[1:]
@@ -40,20 +42,19 @@ func (m *modelQueue) requestCount() int {
 }
 
 func TestGoalLoopContinuesInSameRunnerAndExcludesEvaluatorUsage(t *testing.T) {
-	withTemporaryWorkingDirectory(t)
-	mainModel := &modelQueue{responses: []agent.ModelResponse{
+	mainModel := &modelQueue{responses: []llm.Response{
 		assistantResponse("premature", 4, 1),
 		assistantResponse("verified complete", 5, 2),
 		assistantResponse("[]", 90, 10), // Memory 提取不属于主 Agent token。
 	}}
-	evaluatorModel := &modelQueue{responses: []agent.ModelResponse{
+	evaluatorModel := &modelQueue{responses: []llm.Response{
 		assistantResponse(`{"ok":false,"reason":"missing test evidence","impossible":false}`, 100, 10),
 		assistantResponse(`{"ok":true,"reason":"tests passed","impossible":false}`, 100, 10),
 	}}
 	controller := newIntegratedController(t, evaluatorModel, nil, 8)
 	hookManager := hooks.NewManager()
 	hookManager.OnStop(controller.Stop)
-	runner := agent.NewRunner(mainModel, agent.NewRegistry(), hookManager, "system")
+	runner := agent.NewRunner(mainModel, tool.NewRegistry(), hookManager, "system", agent.WithContextManager(agentctx.New(agentctx.Config{WorkDir: t.TempDir(), Model: mainModel, SystemPrompt: "system"})))
 	session := agent.NewSession(runner)
 	defer session.Close()
 	if _, err := controller.Set("tests pass", 0); err != nil {
@@ -83,14 +84,13 @@ func TestGoalLoopContinuesInSameRunnerAndExcludesEvaluatorUsage(t *testing.T) {
 }
 
 func TestDeferredGoalResumesWhenRuntimeResultArrives(t *testing.T) {
-	withTemporaryWorkingDirectory(t)
-	mainModel := &modelQueue{responses: []agent.ModelResponse{
+	mainModel := &modelQueue{responses: []llm.Response{
 		assistantResponse("background launched", 1, 1),
 		assistantResponse("[]", 50, 5),
 		assistantResponse("background result verified", 2, 1),
 		assistantResponse("[]", 50, 5),
 	}}
-	evaluatorModel := &modelQueue{responses: []agent.ModelResponse{
+	evaluatorModel := &modelQueue{responses: []llm.Response{
 		assistantResponse(`{"ok":true,"reason":"result proves completion","impossible":false}`, 100, 10),
 	}}
 	var pending atomic.Bool
@@ -103,7 +103,7 @@ func TestDeferredGoalResumesWhenRuntimeResultArrives(t *testing.T) {
 	}, 8)
 	hookManager := hooks.NewManager()
 	hookManager.OnStop(controller.Stop)
-	runner := agent.NewRunner(mainModel, agent.NewRegistry(), hookManager, "system")
+	runner := agent.NewRunner(mainModel, tool.NewRegistry(), hookManager, "system", agent.WithContextManager(agentctx.New(agentctx.Config{WorkDir: t.TempDir(), Model: mainModel, SystemPrompt: "system"})))
 	session := agent.NewSession(runner)
 	defer session.Close()
 	if _, err := controller.Set("background check passes", 0); err != nil {
@@ -136,15 +136,14 @@ func TestDeferredGoalResumesWhenRuntimeResultArrives(t *testing.T) {
 }
 
 func TestGlobalTurnLimitLeavesGoalActive(t *testing.T) {
-	withTemporaryWorkingDirectory(t)
-	mainModel := &modelQueue{responses: []agent.ModelResponse{assistantResponse("not done", 1, 1)}}
-	evaluatorModel := &modelQueue{responses: []agent.ModelResponse{
+	mainModel := &modelQueue{responses: []llm.Response{assistantResponse("not done", 1, 1)}}
+	evaluatorModel := &modelQueue{responses: []llm.Response{
 		assistantResponse(`{"ok":false,"reason":"evidence missing","impossible":false}`, 10, 2),
 	}}
 	controller := newIntegratedController(t, evaluatorModel, nil, 8)
 	hookManager := hooks.NewManager()
 	hookManager.OnStop(controller.Stop)
-	runner := agent.NewRunner(mainModel, agent.NewRegistry(), hookManager, "system", agent.WithMaxTurns(1))
+	runner := agent.NewRunner(mainModel, tool.NewRegistry(), hookManager, "system", agent.WithContextManager(agentctx.New(agentctx.Config{WorkDir: t.TempDir(), Model: mainModel, SystemPrompt: "system"})), agent.WithMaxTurns(1))
 	defer runner.Close()
 	if _, err := controller.Set("prove completion", 0); err != nil {
 		t.Fatal(err)
@@ -162,7 +161,7 @@ func TestGlobalTurnLimitLeavesGoalActive(t *testing.T) {
 	}
 }
 
-func newIntegratedController(t *testing.T, evaluatorModel agent.Model, pending func() string, blockCap int) *Controller {
+func newIntegratedController(t *testing.T, evaluatorModel llm.Model, pending func() string, blockCap int) *Controller {
 	t.Helper()
 	evaluator, err := NewPromptEvaluator(evaluatorModel, "judge", 0)
 	if err != nil {
@@ -175,21 +174,9 @@ func newIntegratedController(t *testing.T, evaluatorModel agent.Model, pending f
 	return controller
 }
 
-func assistantResponse(text string, inputTokens, outputTokens int64) agent.ModelResponse {
-	return agent.ModelResponse{
+func assistantResponse(text string, inputTokens, outputTokens int64) llm.Response {
+	return llm.Response{
 		Message: protocol.Message{Role: protocol.RoleAssistant, Content: text},
-		Usage:   agent.TokenUsage{InputTokens: inputTokens, OutputTokens: outputTokens},
+		Usage:   llm.Usage{InputTokens: inputTokens, OutputTokens: outputTokens},
 	}
-}
-
-func withTemporaryWorkingDirectory(t *testing.T) {
-	t.Helper()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 }

@@ -5,23 +5,23 @@ import (
 	"strings"
 	"testing"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 )
 
 type captureModel struct {
-	request  agent.ModelRequest
-	response agent.ModelResponse
+	request  llm.Request
+	response llm.Response
 	err      error
 }
 
-func (m *captureModel) Complete(_ context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *captureModel) Complete(_ context.Context, request llm.Request) (llm.Response, error) {
 	m.request = request
 	return m.response, m.err
 }
 
 func TestPromptEvaluatorUsesToolFreeIndependentRequest(t *testing.T) {
-	model := &captureModel{response: agent.ModelResponse{Message: protocol.Message{
+	model := &captureModel{response: llm.Response{Message: protocol.Message{
 		Role:   protocol.RoleAssistant,
 		Blocks: []protocol.ContentBlock{{Type: protocol.BlockText, Text: `{"ok":true,"reason":"tests passed","impossible":false}`}},
 	}}}

@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"strings"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/permission"
+	"go-agent-harness/internal/task"
+	"go-agent-harness/internal/tool"
 	"go-agent-harness/internal/tool/builtin"
 	"go-agent-harness/internal/workspace"
 )
 
-func (r *Runtime) registryFor(peer *teammate) (*agent.Registry, error) {
+func (r *Runtime) registryFor(peer *teammate) (*tool.Registry, error) {
 	registry, err := r.baseTools.Select(teammateBaseTools...)
 	if err != nil {
 		return nil, err
@@ -22,7 +23,7 @@ func (r *Runtime) registryFor(peer *teammate) (*agent.Registry, error) {
 	tools := builtin.NewDynamic(func() (*workspace.Resolver, error) {
 		return r.currentResolver(peer)
 	})
-	bindings := map[string]agent.Handler{
+	bindings := map[string]tool.Handler{
 		"bash": tools.RunBash, "read_file": tools.RunReadFile,
 		"write_file": tools.RunWriteFile, "edit_file": tools.RunEditFile,
 		"glob": tools.RunGlob,
@@ -36,23 +37,37 @@ func (r *Runtime) registryFor(peer *teammate) (*agent.Registry, error) {
 	return registry, nil
 }
 
-func registerTeammateTools(registry *agent.Registry, peer *teammate) {
+func registerTeammateTools(registry *tool.Registry, peer *teammate) {
 	taskID := map[string]any{"type": "string", "pattern": `^task_[0-9a-f]{8}$`}
-	registry.Register(agent.ToolSpec{Name: "send_message", Description: "Send an intermediate message to lead or an active teammate.",
+	registry.Register(tool.Spec{Name: "send_message", Description: "Send an intermediate message to lead or an active teammate.",
 		Required: []string{"to", "content"}, Properties: map[string]any{
 			"to": map[string]any{"type": "string"}, "content": map[string]any{"type": "string", "minLength": 1},
 		}}, peer.runSendMessage)
-	registry.Register(agent.ToolSpec{Name: "submit_plan", Description: "Submit a work plan for Lead approval.",
+	registry.Register(tool.Spec{Name: "submit_plan", Description: "Submit a work plan for Lead approval.",
 		Required: []string{"plan"}, Properties: map[string]any{"plan": map[string]any{"type": "string", "minLength": 1}}}, peer.runSubmitPlan)
-	registry.Register(agent.ToolSpec{Name: "list_tasks", Description: "List shared tasks."}, peer.runtime.tasks.RunList)
-	registry.Register(agent.ToolSpec{Name: "claim_task", Description: "Claim a ready task.",
+	registry.Register(tool.Spec{Name: "list_tasks", Description: "List shared tasks."}, func(_ context.Context, _ any) (string, error) {
+		items, err := peer.runtime.tasks.List()
+		if err != nil {
+			return "", err
+		}
+		return task.FormatList(items), nil
+	})
+	registry.Register(tool.Spec{Name: "claim_task", Description: "Claim a ready task.",
 		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID}}, peer.runClaim)
-	registry.Register(agent.ToolSpec{Name: "complete_task", Description: "Complete a task owned by this teammate.",
+	registry.Register(tool.Spec{Name: "complete_task", Description: "Complete a task owned by this teammate.",
 		Required: []string{"task_id"}, Properties: map[string]any{"task_id": taskID}}, peer.runComplete)
 }
 
 func (r *Runtime) hooksFor(peer *teammate) *hooks.Manager {
 	manager := hooks.NewManager()
+	// 权限与文件工具使用同一个 assignment 目录，不能回退到进程默认工作区。
+	authorizer := permission.New(func(path string) (string, error) {
+		resolver, err := r.currentResolver(peer)
+		if err != nil {
+			return "", err
+		}
+		return resolver.Resolve(path)
+	}, nil)
 	manager.BeforeTool(func(_ context.Context, call hooks.ToolCall) string {
 		if isMutatingTool(call.Name) {
 			r.mu.Lock()
@@ -63,7 +78,7 @@ func (r *Runtime) hooksFor(peer *teammate) *hooks.Manager {
 				return fmt.Sprintf("Blocked: plan status is %s. Submit or revise the plan and wait for approval before changing the workspace.", gate)
 			}
 		}
-		if err := permission.AuthorizeNonInteractive(call.Name, call.Input); err != nil {
+		if err := authorizer.Authorize(call.Name, call.Input, false); err != nil {
 			logger.Warn("[TeamRuntime] %s permission denied for %s: %v", peer.name, call.Name, err)
 			return err.Error()
 		}

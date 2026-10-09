@@ -23,8 +23,6 @@ func NewDynamic(provider ResolverProvider) *Tools {
 	return &Tools{resolver: provider}
 }
 
-var defaultTools = New(workspace.Default())
-
 func (t *Tools) currentResolver() (*workspace.Resolver, error) {
 	if t == nil || t.resolver == nil {
 		return nil, errors.New("workspace resolver is not configured")
@@ -45,8 +43,4 @@ func (t *Tools) SafePath(path string) (string, error) {
 		return "", err
 	}
 	return resolver.Resolve(path)
-}
-
-func SafePath(path string) (string, error) {
-	return defaultTools.SafePath(path)
 }

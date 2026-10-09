@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -22,7 +23,7 @@ func (r *fakeSessionRunner) Run(ctx context.Context, messages []protocol.Message
 	if r.err != nil {
 		return RunResult{}, r.err
 	}
-	r.result.Messages = CloneMessages(messages)
+	r.result.Messages = protocol.CloneMessages(messages)
 	return r.result, nil
 }
 
@@ -76,12 +77,12 @@ func TestSessionCommitsMessagesOnlyAfterSuccessfulRun(t *testing.T) {
 }
 
 func TestSessionAccumulatesMainAgentUsage(t *testing.T) {
-	runner := &fakeSessionRunner{result: RunResult{Usage: TokenUsage{InputTokens: 8, OutputTokens: 3}}}
+	runner := &fakeSessionRunner{result: RunResult{Usage: llm.Usage{InputTokens: 8, OutputTokens: 3}}}
 	session := newSession(runner)
 	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "first"}); err != nil {
 		t.Fatal(err)
 	}
-	runner.result.Usage = TokenUsage{InputTokens: 5, OutputTokens: 2}
+	runner.result.Usage = llm.Usage{InputTokens: 5, OutputTokens: 2}
 	if _, err := session.Submit(context.Background(), protocol.Message{Role: protocol.RoleUser, Content: "second"}); err != nil {
 		t.Fatal(err)
 	}

@@ -8,10 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-func RunReadFile(ctx context.Context, input any) (string, error) {
-	return defaultTools.RunReadFile(ctx, input)
-}
-
 func (t *Tools) RunReadFile(_ context.Context, input any) (string, error) {
 	path, _ := input.(map[string]any)["path"].(string)
 	if path == "" {

@@ -6,10 +6,6 @@ import (
 	"path/filepath"
 )
 
-func RunWriteFile(ctx context.Context, input any) (string, error) {
-	return defaultTools.RunWriteFile(ctx, input)
-}
-
 func (t *Tools) RunWriteFile(_ context.Context, input any) (string, error) {
 	payload := input.(map[string]any)
 	path, _ := payload["path"].(string)

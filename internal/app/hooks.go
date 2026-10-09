@@ -9,31 +9,26 @@ import (
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/permission"
-	"go-agent-harness/internal/workspace"
 )
 
-func newDefaultHooks(mcpManager *mcp.Manager) *hooks.Manager {
+func newDefaultHooks(mcpManager *mcp.Manager, authorizer *permission.Authorizer, root string) *hooks.Manager {
 	hookManager := hooks.NewManager()
 	// ----- UserPromptSubmit -----
 	hookManager.OnUserPrompt(func(_ string) {
-		logger.Info("[HOOK] UserPromptSubmit: working in %s", workspace.Root())
+		logger.Info("[HOOK] UserPromptSubmit: working in %s", root)
 	})
 
 	// ----- PreToolUse -----
 	hookManager.BeforeTool(func(ctx context.Context, call hooks.ToolCall) string {
 		interactive := permission.IsInteractive(ctx)
-		authorize := permission.Authorize
-		if !interactive {
-			authorize = permission.AuthorizeNonInteractive
-		}
-		if err := authorize(call.Name, call.Input); err != nil {
+		if err := authorizer.Authorize(call.Name, call.Input, interactive); err != nil {
 			logger.Warn("[Permission] denied %s: %v", call.Name, err)
 			return err.Error()
 		}
 		// MCP annotations 由外部 Server 提供，只有 Host Policy 可以免除人工确认。
 		if strings.HasPrefix(call.Name, "mcp__") && (mcpManager == nil || mcpManager.Policy(call.Name) != mcp.PolicyAllow) {
 			logger.Warn("[MCP] Approval required for %s", call.Name)
-			if err := permission.AuthorizeExternal(call.Name, call.Input, interactive); err != nil {
+			if err := authorizer.AuthorizeExternal(call.Name, call.Input, interactive); err != nil {
 				return err.Error()
 			}
 		}

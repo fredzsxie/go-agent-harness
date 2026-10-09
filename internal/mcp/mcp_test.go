@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/tool"
 )
 
 func TestClientValidatesDiscoveryAndContainsCallErrors(t *testing.T) {
@@ -31,8 +31,8 @@ func TestClientValidatesDiscoveryAndContainsCallErrors(t *testing.T) {
 }
 
 func TestManagerConnectsAndDispatchesMockTools(t *testing.T) {
-	registry := agent.NewRegistry()
-	registry.Register(agent.ToolSpec{Name: "bash"}, echoAgentHandler)
+	registry := tool.NewRegistry()
+	registry.Register(tool.Spec{Name: "bash"}, echoAgentHandler)
 	manager := New(registry)
 
 	result, err := manager.Connect("docs")
@@ -66,7 +66,7 @@ func TestManagerConnectsAndDispatchesMockTools(t *testing.T) {
 }
 
 func TestManagerRejectsUnknownServerWithoutMutation(t *testing.T) {
-	registry := agent.NewRegistry()
+	registry := tool.NewRegistry()
 	manager := New(registry)
 	if _, err := manager.Connect("missing"); err == nil {
 		t.Fatal("unknown server should fail")
@@ -77,7 +77,7 @@ func TestManagerRejectsUnknownServerWithoutMutation(t *testing.T) {
 }
 
 func TestManagerRejectsInvalidSchemaBeforeRegisteringAnyTool(t *testing.T) {
-	registry := agent.NewRegistry()
+	registry := tool.NewRegistry()
 	manager := NewWithConfig(Config{Registry: registry, Servers: map[string]Factory{
 		"broken": serverFactory("broken", []Tool{
 			{Name: "valid", InputSchema: objectSchema()},
@@ -93,7 +93,7 @@ func TestManagerRejectsInvalidSchemaBeforeRegisteringAnyTool(t *testing.T) {
 }
 
 func TestManagerRejectsNormalizedCollisionAndLongName(t *testing.T) {
-	registry := agent.NewRegistry()
+	registry := tool.NewRegistry()
 	manager := NewWithConfig(Config{Registry: registry, Servers: map[string]Factory{
 		"docs.one": serverFactory("docs.one", []Tool{{Name: "get.version", InputSchema: objectSchema()}}),
 		"docs_one": serverFactory("docs_one", []Tool{{Name: "get_version", InputSchema: objectSchema()}}),
@@ -114,7 +114,7 @@ func TestManagerRejectsNormalizedCollisionAndLongName(t *testing.T) {
 }
 
 func TestServerAnnotationsDoNotGrantPermission(t *testing.T) {
-	registry := agent.NewRegistry()
+	registry := tool.NewRegistry()
 	manager := NewWithConfig(Config{Registry: registry, Servers: map[string]Factory{
 		"external": func() (*Client, error) {
 			client := NewClient("external")

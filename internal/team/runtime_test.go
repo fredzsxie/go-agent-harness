@@ -9,35 +9,36 @@ import (
 	"testing"
 	"time"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 	"go-agent-harness/internal/task"
+	"go-agent-harness/internal/tool"
 	"go-agent-harness/internal/worktree"
 )
 
 type channelModel struct {
 	responses chan protocol.Message
-	requests  chan agent.ModelRequest
+	requests  chan llm.Request
 }
 
 func newChannelModel() *channelModel {
 	return &channelModel{
 		responses: make(chan protocol.Message, 16),
-		requests:  make(chan agent.ModelRequest, 16),
+		requests:  make(chan llm.Request, 16),
 	}
 }
 
-func (m *channelModel) Complete(ctx context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *channelModel) Complete(ctx context.Context, request llm.Request) (llm.Response, error) {
 	select {
 	case m.requests <- request:
 	case <-ctx.Done():
-		return agent.ModelResponse{}, ctx.Err()
+		return llm.Response{}, ctx.Err()
 	}
 	select {
 	case response := <-m.responses:
-		return agent.ModelResponse{Message: response}, nil
+		return llm.Response{Message: response}, nil
 	case <-ctx.Done():
-		return agent.ModelResponse{}, ctx.Err()
+		return llm.Response{}, ctx.Err()
 	}
 }
 
@@ -222,9 +223,9 @@ func testRuntime(t *testing.T, interval time.Duration) (*Runtime, *channelModel,
 	bus := NewBus(BusConfig{WorkDir: root})
 	requests := NewRequests()
 	model := newChannelModel()
-	base := agent.NewRegistry()
+	base := tool.NewRegistry()
 	for _, name := range teammateBaseTools {
-		base.Register(agent.ToolSpec{Name: name}, func(context.Context, any) (string, error) {
+		base.Register(tool.Spec{Name: name}, func(context.Context, any) (string, error) {
 			return "", fmt.Errorf("unbound base tool")
 		})
 	}
@@ -236,14 +237,14 @@ func testRuntime(t *testing.T, interval time.Duration) (*Runtime, *channelModel,
 	return runtime, model, bus, requests, tasks, root
 }
 
-func waitModelRequest(t *testing.T, model *channelModel) agent.ModelRequest {
+func waitModelRequest(t *testing.T, model *channelModel) llm.Request {
 	t.Helper()
 	select {
 	case request := <-model.requests:
 		return request
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for model request")
-		return agent.ModelRequest{}
+		return llm.Request{}
 	}
 }
 

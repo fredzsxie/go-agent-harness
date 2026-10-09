@@ -9,8 +9,8 @@ import (
 )
 
 func TestRefreshPromptKeepsRequestContextAndAddsDynamicTools(t *testing.T) {
-	manager := New(prompt.NewBuilder("skills", "/repo"), "")
-	initial, err := manager.StartRequest(context.Background(), nil, []string{"connect_mcp"}, prompt.LiveContext{CurrentTime: "2026-09-17T10:00:00+08:00"}, nil)
+	manager := New(Config{WorkDir: t.TempDir(), PromptBuilder: prompt.NewBuilder("skills", "/repo")})
+	initial, err := manager.StartRequest(context.Background(), nil, []string{"connect_mcp"}, prompt.LiveContext{CurrentTime: "2026-09-17T10:00:00+08:00"})
 	if err != nil {
 		t.Fatal(err)
 	}

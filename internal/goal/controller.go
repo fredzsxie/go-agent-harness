@@ -8,13 +8,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/protocol"
 )
 
-// Controller 管理 Session 范围内的 Goal，并把 evaluator 结果转换为 Stop 决策。
+// Controller 实现 s17 的停止闸门，而不是另一套 Agent 循环或隐藏任务队列。
+// evaluator 独立检查完成证据；block 让原历史继续，defer 等待运行中工作，上限与错误保留 Goal。
 type Controller struct {
 	mu                sync.Mutex
 	evaluator         Evaluator
@@ -163,7 +163,7 @@ func (c *Controller) evaluateAfterTurn(ctx context.Context, messages []protocol.
 		return c.finishEvaluation(generation, Evaluation{}, fmt.Errorf("goal evaluator is not configured"))
 	}
 	logger.Info("[Goal] evaluating condition=%q", condition)
-	evaluation, err := evaluator.Evaluate(ctx, condition, agent.CloneMessages(messages))
+	evaluation, err := evaluator.Evaluate(ctx, condition, protocol.CloneMessages(messages))
 	return c.finishEvaluation(generation, evaluation, err)
 }
 

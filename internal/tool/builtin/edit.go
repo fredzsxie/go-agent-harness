@@ -6,10 +6,6 @@ import (
 	"strings"
 )
 
-func RunEditFile(ctx context.Context, input any) (string, error) {
-	return defaultTools.RunEditFile(ctx, input)
-}
-
 func (t *Tools) RunEditFile(_ context.Context, input any) (string, error) {
 	payload := input.(map[string]any)
 	path, _ := payload["path"].(string)

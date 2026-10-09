@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 )
 
@@ -19,13 +20,14 @@ type backgroundEvents interface {
 	HasBackgroundWork() bool
 }
 
-// Session 持有单个 Agent 的消息历史，并串行执行用户与 Cron 输入。
+// Session 是 s15 的单写入入口：用户、Cron、Team 和后台事件共用同一条消息历史。
+// 自动事件使用 TrySubmit，忙时由 app 保留待投递数据，不能并行改写 Runner 的上下文。
 type Session struct {
 	mu            sync.Mutex
 	runner        sessionRunner
 	messages      []protocol.Message
 	activeRequest string
-	totalUsage    TokenUsage
+	totalUsage    llm.Usage
 }
 
 func NewSession(runner *Runner) *Session {
@@ -40,7 +42,7 @@ func newSession(runner sessionRunner) *Session {
 func (s *Session) Submit(ctx context.Context, inputs ...protocol.Message) (RunResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	request := ActiveRequest(inputs)
+	request := protocol.ActiveRequest(inputs)
 	result, err := s.run(WithActiveRequest(ctx, request), inputs)
 	if err == nil && request != "" {
 		s.activeRequest = request
@@ -98,7 +100,7 @@ func (s *Session) run(ctx context.Context, inputs []protocol.Message) (RunResult
 		ctx = WithActiveRequest(ctx, s.activeRequest)
 	}
 	ctx = withTokenBaseline(ctx, s.totalUsage.Total())
-	candidate := append(CloneMessages(s.messages), inputs...)
+	candidate := append(protocol.CloneMessages(s.messages), inputs...)
 	result, err := s.runner.Run(ctx, candidate)
 	s.totalUsage.Add(result.Usage)
 	if err == nil {

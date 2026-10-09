@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/protocol"
 	"go-agent-harness/internal/task"
+	"go-agent-harness/internal/tool"
 	"go-agent-harness/internal/workspace"
-	"go-agent-harness/internal/worktree"
 )
 
 const defaultIdleInterval = 2 * time.Second
@@ -45,21 +46,22 @@ type TeammateInfo struct {
 
 // RuntimeConfig 注入 Team Runtime 依赖；BaseTools 应只包含同步基础工具。
 type RuntimeConfig struct {
-	Model        agent.Model
-	BaseTools    *agent.Registry
-	Tasks        *task.Manager
-	Worktrees    *worktree.Manager
+	Model        llm.Model
+	BaseTools    *tool.Registry
+	Tasks        TaskBoard
+	Worktrees    WorkspaceProvider
 	Bus          *Bus
 	Requests     *Requests
 	IdleInterval time.Duration
 }
 
-// Runtime 管理多个拥有独立消息历史的持久化 Teammate。
+// Runtime 实现 s13：Teammate 完成一轮后进入 IDLE，仍可被消息或 ready Task 唤醒。
+// 这与 s06 一次性 Subagent 不同；共享 Task/邮箱，但不共享 messages 或主 Agent 的全部工具。
 type Runtime struct {
-	model        agent.Model
-	baseTools    *agent.Registry
-	tasks        *task.Manager
-	worktrees    *worktree.Manager
+	model        llm.Model
+	baseTools    *tool.Registry
+	tasks        TaskBoard
+	worktrees    WorkspaceProvider
 	bus          *Bus
 	requests     *Requests
 	idleInterval time.Duration

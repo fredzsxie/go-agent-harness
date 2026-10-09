@@ -88,6 +88,8 @@ func NewExecution(config ExecutionConfig) (*Execution, error) {
 	}, nil
 }
 
+// Agent 是 s16 的独立、无工具模型步骤，不是共享父历史的 Subagent。
+// semantic key 同时包含 label、prompt 与 schema；恢复命中 journal 时校验缓存，避免重复调用模型。
 func (e *Execution) Agent(ctx context.Context, prompt string, options AgentOptions) (any, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {

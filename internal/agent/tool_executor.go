@@ -6,6 +6,7 @@ import (
 
 	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/protocol"
+	"go-agent-harness/internal/tool"
 )
 
 // ToolOutcome 表示工具调用结果及其对会话历史的影响。
@@ -17,7 +18,7 @@ type ToolOutcome struct {
 	SkipPost bool
 }
 
-// ToolInterceptor 在 Registry 分发前处理需要运行时状态的特殊工具。
+// ToolInterceptor 在 tool.Registry 分发前处理需要运行时状态的特殊工具。
 type ToolInterceptor func(ctx context.Context, messages []protocol.Message, call hooks.ToolCall) (ToolOutcome, bool, error)
 
 type ToolBatch struct {
@@ -28,17 +29,19 @@ type ToolBatch struct {
 }
 
 type ToolExecutor struct {
-	registry *Registry
+	registry *tool.Registry
 	hooks    *hooks.Manager
 }
 
-func NewToolExecutor(registry *Registry, hookManager *hooks.Manager) *ToolExecutor {
+func NewToolExecutor(registry *tool.Registry, hookManager *hooks.Manager) *ToolExecutor {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
 	return &ToolExecutor{registry: registry, hooks: hookManager}
 }
 
+// Execute 对应 s02/s04：同一批 tool_use 按顺序执行，逐个经过权限 Hook 并生成匹配 ID 的结果。
+// 普通工具失败转为 is_error 交还模型修正；只有编排错误才中断宿主循环。
 func (e *ToolExecutor) Execute(ctx context.Context, messages []protocol.Message, blocks []protocol.ContentBlock, intercept ToolInterceptor) (ToolBatch, error) {
 	batch := ToolBatch{Results: make([]protocol.ContentBlock, 0, len(blocks))}
 

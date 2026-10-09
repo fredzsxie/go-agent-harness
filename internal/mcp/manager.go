@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/logger"
+	toolkit "go-agent-harness/internal/tool"
 )
 
 const maxToolNameLength = 64
@@ -31,7 +31,7 @@ type Origin struct {
 type Factory func() (*Client, error)
 
 type Config struct {
-	Registry   *agent.Registry
+	Registry   *toolkit.Registry
 	Servers    map[string]Factory
 	HostPolicy map[Origin]Policy
 }
@@ -39,14 +39,14 @@ type Config struct {
 // Manager 保存已连接 Server 与模型工具名的 Host 权限策略。
 type Manager struct {
 	mu         sync.RWMutex
-	registry   *agent.Registry
+	registry   *toolkit.Registry
 	servers    map[string]Factory
 	hostPolicy map[Origin]Policy
 	connected  map[string]*Client
 	policies   map[string]Policy
 }
 
-func New(registry *agent.Registry) *Manager {
+func New(registry *toolkit.Registry) *Manager {
 	return NewWithConfig(Config{
 		Registry: registry,
 		Servers:  mockServers(),
@@ -70,6 +70,8 @@ func NewWithConfig(config Config) *Manager {
 }
 
 // Connect 先完整校验 discovery 结果，再同步提交 Registry、Policy 与连接状态。
+// s14 只发现并注册工具；下一轮 Worker 重新读取 Specs 才把新能力交给模型。
+// Server annotations 不能自行授权，外部调用仍由 app 注入的 Host Policy 与审批 Hook 决定。
 func (m *Manager) Connect(name string) (string, error) {
 	if m == nil || m.registry == nil {
 		return "", fmt.Errorf("MCP registry is required")
@@ -170,8 +172,8 @@ func (m *Manager) Policy(toolName string) Policy {
 }
 
 type discoveredEntry struct {
-	spec    agent.ToolSpec
-	handler agent.Handler
+	spec    toolkit.Spec
+	handler toolkit.Handler
 }
 
 func (m *Manager) discoverLocked(client *Client) ([]discoveredEntry, map[string]Policy, error) {
@@ -228,23 +230,23 @@ func (m *Manager) discoverLocked(client *Client) ([]discoveredEntry, map[string]
 	return entries, policies, nil
 }
 
-func toolSpec(modelName string, tool Tool, origin string) (agent.ToolSpec, error) {
+func toolSpec(modelName string, tool Tool, origin string) (toolkit.Spec, error) {
 	schema := tool.InputSchema
 	if schema == nil {
 		schema = map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 	if schemaType, _ := schema["type"].(string); schemaType != "" && schemaType != "object" {
-		return agent.ToolSpec{}, fmt.Errorf("invalid input schema for %s: type must be object", origin)
+		return toolkit.Spec{}, fmt.Errorf("invalid input schema for %s: type must be object", origin)
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok && schema["properties"] != nil {
-		return agent.ToolSpec{}, fmt.Errorf("invalid input schema for %s: properties must be an object", origin)
+		return toolkit.Spec{}, fmt.Errorf("invalid input schema for %s: properties must be an object", origin)
 	}
 	required, err := stringSlice(schema["required"])
 	if err != nil {
-		return agent.ToolSpec{}, fmt.Errorf("invalid input schema for %s: %w", origin, err)
+		return toolkit.Spec{}, fmt.Errorf("invalid input schema for %s: %w", origin, err)
 	}
-	return agent.ToolSpec{
+	return toolkit.Spec{
 		Name: modelName, Description: tool.Description,
 		Properties: cloneMap(properties), Required: required,
 	}, nil

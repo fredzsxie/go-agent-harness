@@ -13,20 +13,6 @@ type Resolver struct {
 	root string
 }
 
-var defaultResolver = mustCurrentResolver()
-
-func mustCurrentResolver() *Resolver {
-	cwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	resolver, err := New(cwd)
-	if err != nil {
-		panic(err)
-	}
-	return resolver
-}
-
 func New(root string) (*Resolver, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -48,19 +34,6 @@ func New(root string) (*Resolver, error) {
 		}
 	}
 	return &Resolver{root: filepath.Clean(resolvedRoot)}, nil
-}
-
-func Root() string {
-	return defaultResolver.Root()
-}
-
-// Default 返回主进程启动目录对应的 Resolver。
-func Default() *Resolver {
-	return defaultResolver
-}
-
-func Resolve(path string) (string, error) {
-	return defaultResolver.Resolve(path)
 }
 
 func (r *Resolver) Root() string {

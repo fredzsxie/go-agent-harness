@@ -19,11 +19,17 @@ func main() {
 		exit(err)
 	}
 	logger.SetMode(mode)
+	// 日志配置属于进程入口，创建 App 不应改写其他实例的输出。
+	logger.SetOutput(os.Stdout)
 	cfg, err := config.LoadLLMConfig()
 	if err != nil {
 		exit(err)
 	}
-	if err := app.New(cfg, os.Stdin, os.Stdout).Run(context.Background()); err != nil {
+	application, err := app.New(cfg, os.Stdin, os.Stdout)
+	if err != nil {
+		exit(err)
+	}
+	if err := application.Run(context.Background()); err != nil {
 		exit(err)
 	}
 }

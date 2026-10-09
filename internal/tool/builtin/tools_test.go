@@ -12,12 +12,16 @@ import (
 )
 
 func TestGlobSupportsRecursiveDoubleStarAndCapsResults(t *testing.T) {
-	root := workspace.Root()
-	testDir, err := os.MkdirTemp(root, ".glob-test-")
+	root := t.TempDir()
+	resolver, err := workspace.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(testDir)
+	tools := New(resolver)
+	testDir := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	relRoot, err := filepath.Rel(root, testDir)
 	if err != nil {
@@ -32,7 +36,7 @@ func TestGlobSupportsRecursiveDoubleStarAndCapsResults(t *testing.T) {
 		}
 	}
 
-	output, err := RunGlob(context.Background(), map[string]any{"pattern": filepath.ToSlash(filepath.Join(relRoot, "**", "*.py"))})
+	output, err := tools.RunGlob(context.Background(), map[string]any{"pattern": filepath.ToSlash(filepath.Join(relRoot, "**", "*.py"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +51,7 @@ func TestGlobSupportsRecursiveDoubleStarAndCapsResults(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	output, err = RunGlob(context.Background(), map[string]any{"pattern": filepath.ToSlash(filepath.Join(relRoot, "*.txt"))})
+	output, err = tools.RunGlob(context.Background(), map[string]any{"pattern": filepath.ToSlash(filepath.Join(relRoot, "*.txt"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,12 +62,16 @@ func TestGlobSupportsRecursiveDoubleStarAndCapsResults(t *testing.T) {
 }
 
 func TestReadFileSupportsUTF8AndLineLimit(t *testing.T) {
-	root := workspace.Root()
-	testDir, err := os.MkdirTemp(root, ".read-test-")
+	root := t.TempDir()
+	resolver, err := workspace.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(testDir)
+	tools := New(resolver)
+	testDir := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	relPath, err := filepath.Rel(root, filepath.Join(testDir, "note.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +80,7 @@ func TestReadFileSupportsUTF8AndLineLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := RunReadFile(context.Background(), map[string]any{"path": relPath, "limit": float64(2)})
+	output, err := tools.RunReadFile(context.Background(), map[string]any{"path": relPath, "limit": float64(2)})
 	if err != nil {
 		t.Fatal(err)
 	}

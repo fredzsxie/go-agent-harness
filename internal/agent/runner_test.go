@@ -39,9 +39,13 @@ func TestInjectBackgroundResultsAddsStandaloneUserEvent(t *testing.T) {
 	}
 }
 
-func TestExtractJSONArrayReturnsFirstValidArray(t *testing.T) {
-	got := extractJSONArray(`prefix [invalid] text [{"name":"memory"}] suffix [1,2]`)
-	if got != `[{"name":"memory"}]` {
-		t.Fatalf("extractJSONArray() = %q", got)
+func TestBackgroundNotificationFollowsAuthoritativeToolResults(t *testing.T) {
+	messages := []protocol.Message{{Role: protocol.RoleUser, Content: "stale cache", Blocks: []protocol.ContentBlock{
+		{Type: protocol.BlockToolResult, ToolUseID: "read", Text: "result"},
+	}}}
+	messages = injectBackgroundResults(messages, []string{"background done"})
+	blocks := messages[0].Blocks
+	if messages[0].Content != "" || len(blocks) != 2 || blocks[0].Type != protocol.BlockToolResult || blocks[1].Text != "background done" {
+		t.Fatalf("notification reordered results or duplicated Content: %#v", messages)
 	}
 }

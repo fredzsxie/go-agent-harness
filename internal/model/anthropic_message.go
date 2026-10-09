@@ -7,11 +7,11 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/protocol"
+	"go-agent-harness/internal/tool"
 )
 
-func toAnthropicTools(specs []agent.ToolSpec) []anthropic.ToolUnionParam {
+func toAnthropicTools(specs []tool.Spec) []anthropic.ToolUnionParam {
 	params := make([]anthropic.ToolUnionParam, 0, len(specs))
 	for _, spec := range specs {
 		params = append(params, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{

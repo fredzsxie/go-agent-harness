@@ -3,18 +3,18 @@ package app
 import (
 	"testing"
 
-	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/mcp"
 	agentruntime "go-agent-harness/internal/runtime"
 	"go-agent-harness/internal/task"
 	"go-agent-harness/internal/team"
+	"go-agent-harness/internal/tool"
 	"go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/worktree"
 )
 
 func TestBackgroundBashOptionIsMainAgentOnly(t *testing.T) {
-	mainRegistry := newDefaultRegistry()
-	subRegistry := newSubagentRegistry()
+	mainRegistry := newDefaultRegistry(nil)
+	subRegistry := newSubagentRegistry(nil)
 
 	mainBash := mainRegistry.Specs()[0]
 	subBash := subRegistry.Specs()[0]
@@ -27,8 +27,8 @@ func TestBackgroundBashOptionIsMainAgentOnly(t *testing.T) {
 }
 
 func TestTeamToolsAreLeadOnly(t *testing.T) {
-	mainRegistry := newDefaultRegistry()
-	base := newSubagentRegistry()
+	mainRegistry := newDefaultRegistry(nil)
+	base := newSubagentRegistry(nil)
 	workDir := t.TempDir()
 	tasks := task.New(task.Config{WorkDir: workDir})
 	worktrees := worktree.New(worktree.Config{WorkDir: workDir, Tasks: tasks})
@@ -37,7 +37,8 @@ func TestTeamToolsAreLeadOnly(t *testing.T) {
 		Bus: team.NewBus(team.BusConfig{WorkDir: workDir}), Requests: team.NewRequests(),
 	})
 	defer runtime.Close()
-	registerTeamTools(mainRegistry, runtime, worktrees)
+	team.RegisterLeadTools(mainRegistry, runtime)
+	worktree.RegisterTool(mainRegistry, worktrees)
 	mainTools := toolNames(mainRegistry.Specs())
 	subTools := toolNames(base.Specs())
 	for _, name := range []string{"spawn_teammate", "list_teammates", "send_message", "request_shutdown", "request_plan", "review_plan", "create_worktree"} {
@@ -51,10 +52,10 @@ func TestTeamToolsAreLeadOnly(t *testing.T) {
 }
 
 func TestCronToolsAreMainAgentOnly(t *testing.T) {
-	mainRegistry := newDefaultRegistry()
-	registerCronTools(mainRegistry, agentruntime.NewCron(agentruntime.CronConfig{WorkDir: t.TempDir()}))
+	mainRegistry := newDefaultRegistry(nil)
+	agentruntime.RegisterCronTools(mainRegistry, agentruntime.NewCron(agentruntime.CronConfig{WorkDir: t.TempDir()}))
 	mainTools := toolNames(mainRegistry.Specs())
-	subTools := toolNames(newSubagentRegistry().Specs())
+	subTools := toolNames(newSubagentRegistry(nil).Specs())
 	for _, name := range []string{"schedule_cron", "list_crons", "cancel_cron"} {
 		if !mainTools[name] {
 			t.Fatalf("main agent is missing %s", name)
@@ -66,10 +67,10 @@ func TestCronToolsAreMainAgentOnly(t *testing.T) {
 }
 
 func TestMCPToolsAreMainAgentOnly(t *testing.T) {
-	mainRegistry := newDefaultRegistry()
+	mainRegistry := newDefaultRegistry(nil)
 	manager := mcp.New(mainRegistry)
-	registerMCPTool(mainRegistry, manager)
-	subRegistry := newSubagentRegistry()
+	mcp.RegisterTool(mainRegistry, manager)
+	subRegistry := newSubagentRegistry(nil)
 
 	if _, err := manager.Connect("docs"); err != nil {
 		t.Fatal(err)
@@ -87,21 +88,21 @@ func TestMCPToolsAreMainAgentOnly(t *testing.T) {
 }
 
 func TestWorkflowToolIsMainAgentOnly(t *testing.T) {
-	mainRegistry := newDefaultRegistry()
+	mainRegistry := newDefaultRegistry(nil)
 	workflowRegistry := workflow.NewRegistry()
 	if err := workflow.RegisterDefaults(workflowRegistry); err != nil {
 		t.Fatal(err)
 	}
-	registerWorkflowTool(mainRegistry, workflow.NewManager(workflow.ManagerConfig{Registry: workflowRegistry}))
+	workflow.RegisterTool(mainRegistry, workflow.NewManager(workflow.ManagerConfig{Registry: workflowRegistry}))
 	if !toolNames(mainRegistry.Specs())["workflow"] {
 		t.Fatal("main agent is missing workflow")
 	}
-	if toolNames(newSubagentRegistry().Specs())["workflow"] {
+	if toolNames(newSubagentRegistry(nil).Specs())["workflow"] {
 		t.Fatal("subagent should not expose workflow")
 	}
 }
 
-func toolNames(specs []agent.ToolSpec) map[string]bool {
+func toolNames(specs []tool.Spec) map[string]bool {
 	names := make(map[string]bool, len(specs))
 	for _, spec := range specs {
 		names[spec.Name] = true

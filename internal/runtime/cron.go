@@ -1,14 +1,12 @@
 package runtime
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +34,9 @@ type CronConfig struct {
 	Path    string
 }
 
-// CronScheduler 管理 Cron 定义、持久化状态和待投递队列，不负责调用 Agent。
+// CronScheduler 实现 s12：定时产生未来的用户提示，不直接执行命令，也不创建第二个 Agent。
+// pending → Consume → Acknowledge 是至少一次投递；宿主崩溃可能重投，不能当成 exactly-once。
+// 只有 app 的轮询协程运行时才检查到期；durable 仅持久化定义与待确认状态，不是系统守护服务。
 type CronScheduler struct {
 	mu      sync.Mutex
 	jobs    map[string]*CronJob
@@ -60,125 +60,6 @@ func NewCron(cfg CronConfig) *CronScheduler {
 		path, err = resolver.Resolve(path)
 	}
 	return &CronScheduler{jobs: make(map[string]*CronJob), path: path, initErr: err}
-}
-
-// ValidateCron 校验五段 cron 表达式，支持 *、*/N、N、N-M 和逗号列表。
-func ValidateCron(expression string) error {
-	fields := strings.Fields(expression)
-	if len(fields) != 5 {
-		return fmt.Errorf("expected 5 fields, got %d", len(fields))
-	}
-	rules := []struct {
-		name     string
-		min, max int
-	}{
-		{"minute", 0, 59},
-		{"hour", 0, 23},
-		{"day-of-month", 1, 31},
-		{"month", 1, 12},
-		{"day-of-week", 0, 6},
-	}
-	for i, field := range fields {
-		if err := validateCronField(field, rules[i].min, rules[i].max); err != nil {
-			return fmt.Errorf("%s: %w", rules[i].name, err)
-		}
-	}
-	return nil
-}
-
-func validateCronField(field string, min, max int) error {
-	if field == "*" {
-		return nil
-	}
-	if strings.HasPrefix(field, "*/") {
-		step, err := strconv.Atoi(strings.TrimPrefix(field, "*/"))
-		if err != nil || step <= 0 {
-			return fmt.Errorf("invalid step: %s", field)
-		}
-		return nil
-	}
-	if strings.Contains(field, ",") {
-		for _, part := range strings.Split(field, ",") {
-			if err := validateCronField(strings.TrimSpace(part), min, max); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if strings.Contains(field, "-") {
-		parts := strings.SplitN(field, "-", 2)
-		start, startErr := strconv.Atoi(parts[0])
-		end, endErr := strconv.Atoi(parts[1])
-		if startErr != nil || endErr != nil {
-			return fmt.Errorf("invalid range: %s", field)
-		}
-		if start > end {
-			return fmt.Errorf("range start is greater than end: %s", field)
-		}
-		if start < min || end > max {
-			return fmt.Errorf("range %s is outside [%d-%d]", field, min, max)
-		}
-		return nil
-	}
-	value, err := strconv.Atoi(field)
-	if err != nil {
-		return fmt.Errorf("invalid field: %s", field)
-	}
-	if value < min || value > max {
-		return fmt.Errorf("value %d is outside [%d-%d]", value, min, max)
-	}
-	return nil
-}
-
-// CronMatches 使用本地时间判断表达式是否命中；日期与星期同时受限时采用 cron 的 OR 语义。
-func CronMatches(expression string, moment time.Time) bool {
-	if ValidateCron(expression) != nil {
-		return false
-	}
-	fields := strings.Fields(expression)
-	if !cronFieldMatches(fields[0], moment.Minute()) ||
-		!cronFieldMatches(fields[1], moment.Hour()) ||
-		!cronFieldMatches(fields[3], int(moment.Month())) {
-		return false
-	}
-	dayMatches := cronFieldMatches(fields[2], moment.Day())
-	weekdayMatches := cronFieldMatches(fields[4], int(moment.Weekday()))
-	switch {
-	case fields[2] == "*" && fields[4] == "*":
-		return true
-	case fields[2] == "*":
-		return weekdayMatches
-	case fields[4] == "*":
-		return dayMatches
-	default:
-		return dayMatches || weekdayMatches
-	}
-}
-
-func cronFieldMatches(field string, value int) bool {
-	if field == "*" {
-		return true
-	}
-	if strings.HasPrefix(field, "*/") {
-		step, _ := strconv.Atoi(strings.TrimPrefix(field, "*/"))
-		return value%step == 0
-	}
-	if strings.Contains(field, ",") {
-		for _, part := range strings.Split(field, ",") {
-			if cronFieldMatches(strings.TrimSpace(part), value) {
-				return true
-			}
-		}
-		return false
-	}
-	if strings.Contains(field, "-") {
-		parts := strings.SplitN(field, "-", 2)
-		start, _ := strconv.Atoi(parts[0])
-		end, _ := strconv.Atoi(parts[1])
-		return value >= start && value <= end
-	}
-	want, _ := strconv.Atoi(field)
-	return value == want
 }
 
 func validateCronJob(job CronJob) error {
@@ -404,64 +285,4 @@ func (m *CronScheduler) removeQueuedLocked(id string) {
 		}
 	}
 	m.queue = kept
-}
-
-func (m *CronScheduler) RunSchedule(_ context.Context, input any) (string, error) {
-	payload, _ := input.(map[string]any)
-	expression, _ := payload["cron"].(string)
-	prompt, _ := payload["prompt"].(string)
-	recurring, err := optionalBool(payload, "recurring", true)
-	if err != nil {
-		return "", err
-	}
-	durable, err := optionalBool(payload, "durable", true)
-	if err != nil {
-		return "", err
-	}
-	job, err := m.Schedule(expression, prompt, recurring, durable)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Scheduled %s: %s -> %s", job.ID, job.Cron, job.Prompt), nil
-}
-
-func (m *CronScheduler) RunList(context.Context, any) (string, error) {
-	jobs := m.List()
-	if len(jobs) == 0 {
-		return "No cron jobs.", nil
-	}
-	lines := make([]string, 0, len(jobs))
-	for _, job := range jobs {
-		frequency := "one-shot"
-		if job.Recurring {
-			frequency = "recurring"
-		}
-		storage := "session"
-		if job.Durable {
-			storage = "durable"
-		}
-		lines = append(lines, fmt.Sprintf("%s: %s -> %s [%s, %s]", job.ID, job.Cron, preview(job.Prompt, 60), frequency, storage))
-	}
-	return strings.Join(lines, "\n"), nil
-}
-
-func (m *CronScheduler) RunCancel(_ context.Context, input any) (string, error) {
-	payload, _ := input.(map[string]any)
-	id, _ := payload["job_id"].(string)
-	if err := m.Cancel(id); err != nil {
-		return "", err
-	}
-	return "Cancelled " + id, nil
-}
-
-func optionalBool(payload map[string]any, key string, fallback bool) (bool, error) {
-	value, exists := payload[key]
-	if !exists {
-		return fallback, nil
-	}
-	parsed, ok := value.(bool)
-	if !ok {
-		return false, fmt.Errorf("%s must be a boolean", key)
-	}
-	return parsed, nil
 }

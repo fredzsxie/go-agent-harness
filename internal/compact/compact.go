@@ -85,6 +85,8 @@ func (m *Manager) MaxReactiveRetries() int {
 	return m.cfg.MaxReactiveRetries
 }
 
+// Prepare 按 s08 的成本梯度处理上下文：先把大输出落盘，再裁旧会话、压旧结果，最后调用摘要模型。
+// L1–L4 是策略名称而非固定执行序号；保留未被下一轮模型消费的工具结果比缩短历史更重要。
 func (m *Manager) Prepare(ctx context.Context, messages []protocol.Message, activeRequest string, summarize Summarizer) ([]protocol.Message, bool, error) {
 	logger.Info("[Prepare] L3 compact")
 	prepared, err := m.ToolResultBudget(messages)
@@ -192,7 +194,7 @@ func (m *Manager) MicroCompact(messages []protocol.Message) []protocol.Message {
 		return messages
 	}
 
-	out := cloneMessages(messages)
+	out := protocol.CloneMessages(messages)
 	for _, pos := range consumed[:len(consumed)-m.cfg.KeepRecentToolResults] {
 		block := &out[pos.messageIndex].Blocks[pos.blockIndex]
 		if len(block.Text) > 120 {
@@ -208,7 +210,7 @@ func (m *Manager) MicroCompact(messages []protocol.Message) []protocol.Message {
 	return out
 }
 
-// L3: tool_resutl_budget 大结果落盘
+// L3：tool_result_budget 将大结果落盘，历史保留预览和文件路径，后续仍可重新读取。
 func (m *Manager) ToolResultBudget(messages []protocol.Message) ([]protocol.Message, error) {
 	if len(messages) == 0 {
 		return messages, nil
@@ -243,7 +245,7 @@ func (m *Manager) ToolResultBudget(messages []protocol.Message) ([]protocol.Mess
 		return blocks[i].size > blocks[j].size
 	})
 
-	out := cloneMessages(messages)
+	out := protocol.CloneMessages(messages)
 	changed := false
 	for _, ranked := range blocks {
 		if ranked.size <= m.cfg.PersistThreshold && total <= m.cfg.ToolResultBudget {
@@ -459,29 +461,4 @@ func isToolResultMessage(message protocol.Message) bool {
 		}
 	}
 	return false
-}
-
-func cloneMessages(messages []protocol.Message) []protocol.Message {
-	out := make([]protocol.Message, 0, len(messages))
-	for _, message := range messages {
-		copyMessage := protocol.Message{
-			Role:    message.Role,
-			Content: message.Content,
-		}
-		if len(message.Blocks) > 0 {
-			copyMessage.Blocks = make([]protocol.ContentBlock, 0, len(message.Blocks))
-			for _, block := range message.Blocks {
-				copyBlock := block
-				if block.Input != nil {
-					copyBlock.Input = make(map[string]any, len(block.Input))
-					for key, value := range block.Input {
-						copyBlock.Input[key] = value
-					}
-				}
-				copyMessage.Blocks = append(copyMessage.Blocks, copyBlock)
-			}
-		}
-		out = append(out, copyMessage)
-	}
-	return out
 }

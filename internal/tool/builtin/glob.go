@@ -12,10 +12,6 @@ import (
 
 const maxGlobMatches = 200
 
-func RunGlob(ctx context.Context, input any) (string, error) {
-	return defaultTools.RunGlob(ctx, input)
-}
-
 func (t *Tools) RunGlob(ctx context.Context, input any) (string, error) {
 	pattern, _ := input.(map[string]any)["pattern"].(string)
 	pattern = filepath.ToSlash(strings.TrimSpace(pattern))

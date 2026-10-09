@@ -1,3 +1,4 @@
+// Package todo 实现 s05 的会话内计划清单，不保存到磁盘，也不参与 s10 的任务依赖和认领。
 package todo
 
 import (
@@ -39,6 +40,8 @@ func NewManager(out io.Writer) *Manager {
 	}
 }
 
+// RunWrite 先完整校验（最多 20 项、最多一项 in_progress），再一次替换旧清单。
+// 校验失败保留原状态；每三轮提醒由 Runner 负责，Todo 本身不控制模型循环。
 func (m *Manager) RunWrite(ctx context.Context, input any) (string, error) {
 	_ = ctx
 	payload, ok := input.(map[string]any)

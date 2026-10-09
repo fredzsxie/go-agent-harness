@@ -43,6 +43,8 @@ type StopDecision struct {
 	Reason string
 }
 
+// Manager 对应 s04 的生命周期管线。宿主在启动前注册，运行期间只触发，不再追加 Hook。
+// s11 的 PostToolUse 可在后台触发；有可变状态的 Hook 必须自行保证并发安全。
 type Manager struct {
 	userPromptSubmit []UserPromptSubmitHook
 	preToolUse       []PreToolUseHook

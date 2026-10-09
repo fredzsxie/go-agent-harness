@@ -4,19 +4,19 @@ import (
 	"context"
 	"testing"
 
-	"go-agent-harness/internal/agent"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
 )
 
 type captureWorkflowModel struct {
-	request agent.ModelRequest
+	request llm.Request
 }
 
-func (m *captureWorkflowModel) Complete(_ context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *captureWorkflowModel) Complete(_ context.Context, request llm.Request) (llm.Response, error) {
 	m.request = request
-	return agent.ModelResponse{
+	return llm.Response{
 		Message: protocol.Message{Role: protocol.RoleAssistant, Content: "```json\n{\"ok\":true}\n```"},
-		Usage:   agent.TokenUsage{InputTokens: 11, OutputTokens: 4},
+		Usage:   llm.Usage{InputTokens: 11, OutputTokens: 4},
 	}, nil
 }
 

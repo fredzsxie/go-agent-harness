@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/protocol"
 )
@@ -109,7 +110,7 @@ func isTransientModelError(err error) bool {
 }
 
 func modelHTTPStatus(err error) int {
-	var modelErr *ModelError
+	var modelErr *llm.Error
 	if errors.As(err, &modelErr) {
 		return modelErr.HTTPStatus
 	}

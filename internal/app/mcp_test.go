@@ -7,20 +7,21 @@ import (
 
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/permission"
 	"go-agent-harness/internal/protocol"
 )
 
 func TestMCPHostPolicyAllowsKnownReadOnlyAndFailsClosed(t *testing.T) {
-	registry := newDefaultRegistry()
+	registry := newDefaultRegistry(nil)
 	manager := mcp.New(registry)
-	registerMCPTool(registry, manager)
+	mcp.RegisterTool(registry, manager)
 	if _, err := manager.Connect("deploy"); err != nil {
 		t.Fatal(err)
 	}
 
-	hookManager := newDefaultHooks(manager)
+	hookManager := newDefaultHooks(manager, permission.New(nil, nil), t.TempDir())
 	ctx := permission.WithInteractive(context.Background(), false)
 	if blocked := hookManager.TriggerPreToolUse(ctx, hooks.ToolCall{Name: "mcp__deploy__status"}); blocked != "" {
 		t.Fatalf("Host allow policy should permit status: %s", blocked)
@@ -36,7 +37,7 @@ type mcpSequenceModel struct {
 	calls int
 }
 
-func (m *mcpSequenceModel) Complete(_ context.Context, request agent.ModelRequest) (agent.ModelResponse, error) {
+func (m *mcpSequenceModel) Complete(_ context.Context, request llm.Request) (llm.Response, error) {
 	m.calls++
 	names := toolNames(request.Tools)
 	switch m.calls {
@@ -52,16 +53,16 @@ func (m *mcpSequenceModel) Complete(_ context.Context, request agent.ModelReques
 		return toolCall("search_1", "mcp__docs__search", map[string]any{"query": "agent hooks"}), nil
 	default:
 		m.t.Fatalf("unexpected model call: %d", m.calls)
-		return agent.ModelResponse{}, nil
+		return llm.Response{}, nil
 	}
 }
 
 func TestMCPToolAppearsAndRunsOnNextWorkerRound(t *testing.T) {
-	registry := newDefaultRegistry()
+	registry := newDefaultRegistry(nil)
 	manager := mcp.New(registry)
-	registerMCPTool(registry, manager)
+	mcp.RegisterTool(registry, manager)
 	model := &mcpSequenceModel{t: t}
-	worker := agent.NewWorker(model, registry, newDefaultHooks(manager))
+	worker := agent.NewWorker(model, registry, newDefaultHooks(manager, permission.New(nil, nil), t.TempDir()))
 
 	first, err := worker.RunTurn(context.Background(), "system", nil, nil)
 	if err != nil || len(first.Tools.Results) != 1 || first.Tools.Results[0].IsError {
@@ -76,8 +77,8 @@ func TestMCPToolAppearsAndRunsOnNextWorkerRound(t *testing.T) {
 	}
 }
 
-func toolCall(id, name string, input map[string]any) agent.ModelResponse {
-	return agent.ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
+func toolCall(id, name string, input map[string]any) llm.Response {
+	return llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
 		Type: protocol.BlockToolUse, ToolUseID: id, ToolName: name, Input: input,
 	}}}}
 }

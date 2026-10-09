@@ -3,33 +3,35 @@ package agent
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go-agent-harness/internal/agentctx"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/protocol"
+	"go-agent-harness/internal/tool"
 )
 
 type scriptedModelResult struct {
-	response ModelResponse
+	response llm.Response
 	err      error
 }
 
 type scriptedModel struct {
 	mu       sync.Mutex
 	results  []scriptedModelResult
-	requests []ModelRequest
+	requests []llm.Request
 }
 
-func (m *scriptedModel) Complete(_ context.Context, request ModelRequest) (ModelResponse, error) {
+func (m *scriptedModel) Complete(_ context.Context, request llm.Request) (llm.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, request)
 	if len(m.results) == 0 {
-		return ModelResponse{}, errors.New("unexpected model call")
+		return llm.Response{}, errors.New("unexpected model call")
 	}
 	result := m.results[0]
 	m.results = m.results[1:]
@@ -38,11 +40,11 @@ func (m *scriptedModel) Complete(_ context.Context, request ModelRequest) (Model
 
 func TestRunTurnWithRetrySwitchesModelAfterConsecutive529(t *testing.T) {
 	model := &scriptedModel{results: []scriptedModelResult{
-		{err: &ModelError{HTTPStatus: 529, Err: errors.New("overloaded")}},
-		{err: &ModelError{HTTPStatus: 529, Err: errors.New("overloaded")}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}}},
+		{err: &llm.Error{HTTPStatus: 529, Err: errors.New("overloaded")}},
+		{err: &llm.Error{HTTPStatus: 529, Err: errors.New("overloaded")}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}}},
 	}}
-	runner := NewRunner(model, NewRegistry(), nil, "system", WithFallbackModel("fallback-model"))
+	runner := NewRunner(model, tool.NewRegistry(), nil, "system", testContext(t, model), WithFallbackModel("fallback-model"))
 	defer runner.Close()
 	runner.recovery.sleep = func(context.Context, time.Duration) error { return nil }
 	runner.recovery.jitter = func(time.Duration) time.Duration { return 0 }
@@ -63,11 +65,11 @@ func TestRunTurnWithRetrySwitchesModelAfterConsecutive529(t *testing.T) {
 
 func TestRunTurnWithRetryKeepsPrimaryModelFor429(t *testing.T) {
 	model := &scriptedModel{results: []scriptedModelResult{
-		{err: &ModelError{HTTPStatus: 429, Err: errors.New("rate limited")}},
-		{err: &ModelError{HTTPStatus: 429, Err: errors.New("rate limited")}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}}},
+		{err: &llm.Error{HTTPStatus: 429, Err: errors.New("rate limited")}},
+		{err: &llm.Error{HTTPStatus: 429, Err: errors.New("rate limited")}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "ok"}}},
 	}}
-	runner := NewRunner(model, NewRegistry(), nil, "system", WithFallbackModel("fallback-model"))
+	runner := NewRunner(model, tool.NewRegistry(), nil, "system", testContext(t, model), WithFallbackModel("fallback-model"))
 	defer runner.Close()
 	runner.recovery.sleep = func(context.Context, time.Duration) error { return nil }
 	runner.recovery.jitter = func(time.Duration) time.Duration { return 0 }
@@ -88,9 +90,9 @@ func TestRunTurnWithRetryKeepsPrimaryModelFor429(t *testing.T) {
 
 func TestRunTurnWithRetryDoesNotRetryCanceledContext(t *testing.T) {
 	model := &scriptedModel{results: []scriptedModelResult{{
-		err: &ModelError{HTTPStatus: 429, Err: context.Canceled},
+		err: &llm.Error{HTTPStatus: 429, Err: context.Canceled},
 	}}}
-	runner := NewRunner(model, NewRegistry(), nil, "system")
+	runner := NewRunner(model, tool.NewRegistry(), nil, "system", testContext(t, model))
 	defer runner.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -105,21 +107,13 @@ func TestRunTurnWithRetryDoesNotRetryCanceledContext(t *testing.T) {
 }
 
 func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 	model := &scriptedModel{results: []scriptedModelResult{
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "discarded"}, StopReason: "max_tokens", Usage: TokenUsage{InputTokens: 10, OutputTokens: 1}}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part one"}, StopReason: "max_tokens", Usage: TokenUsage{InputTokens: 11, OutputTokens: 2}}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part two"}, StopReason: "end_turn", Usage: TokenUsage{InputTokens: 12, OutputTokens: 3}}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}, StopReason: "end_turn"}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "discarded"}, StopReason: "max_tokens", Usage: llm.Usage{InputTokens: 10, OutputTokens: 1}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part one"}, StopReason: "max_tokens", Usage: llm.Usage{InputTokens: 11, OutputTokens: 2}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "part two"}, StopReason: "end_turn", Usage: llm.Usage{InputTokens: 12, OutputTokens: 3}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}, StopReason: "end_turn"}},
 	}}
-	runner := NewRunner(model, NewRegistry(), nil, "system")
+	runner := NewRunner(model, tool.NewRegistry(), nil, "system", testContext(t, model))
 	defer runner.Close()
 
 	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "write"}})
@@ -129,7 +123,7 @@ func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
 	if result.Output != "part two" {
 		t.Fatalf("unexpected output: %q", result.Output)
 	}
-	if result.Usage != (TokenUsage{InputTokens: 33, OutputTokens: 6}) {
+	if result.Usage != (llm.Usage{InputTokens: 33, OutputTokens: 6}) {
 		t.Fatalf("unexpected main Agent usage: %#v", result.Usage)
 	}
 	if len(model.requests) < 3 || model.requests[0].MaxTokens != DefaultMaxTokens || model.requests[1].MaxTokens != escalatedMaxTokens {
@@ -142,19 +136,11 @@ func TestRunnerEscalatesAndContinuesTruncatedResponse(t *testing.T) {
 }
 
 func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 
 	model := &scriptedModel{results: []scriptedModelResult{
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "not yet"}, Usage: TokenUsage{InputTokens: 4, OutputTokens: 1}}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "done"}, Usage: TokenUsage{InputTokens: 6, OutputTokens: 2}}},
-		{response: ModelResponse{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "not yet"}, Usage: llm.Usage{InputTokens: 4, OutputTokens: 1}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "done"}, Usage: llm.Usage{InputTokens: 6, OutputTokens: 2}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}}},
 	}}
 	hookManager := hooks.NewManager()
 	stopCalls := 0
@@ -168,7 +154,7 @@ func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
 		}
 		return hooks.StopDecision{Action: hooks.StopAllow}, nil
 	})
-	runner := NewRunner(model, NewRegistry(), hookManager, "system")
+	runner := NewRunner(model, tool.NewRegistry(), hookManager, "system", testContext(t, model))
 	defer runner.Close()
 
 	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "work"}})
@@ -178,7 +164,7 @@ func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
 	if result.Output != "done" || result.Stop.Action != hooks.StopAllow || stopCalls != 2 {
 		t.Fatalf("unexpected result=%#v stopCalls=%d", result, stopCalls)
 	}
-	if result.Usage != (TokenUsage{InputTokens: 10, OutputTokens: 3}) {
+	if result.Usage != (llm.Usage{InputTokens: 10, OutputTokens: 3}) {
 		t.Fatalf("unexpected usage: %#v", result.Usage)
 	}
 	secondRequest := model.requests[1].Messages
@@ -188,25 +174,17 @@ func TestRunnerContinuesOnlyWhenStopHookBlocks(t *testing.T) {
 }
 
 func TestRunnerReturnsControlAtGlobalTurnLimit(t *testing.T) {
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 
 	model := &scriptedModel{results: []scriptedModelResult{
-		{response: ModelResponse{
+		{response: llm.Response{
 			Message: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{
 				Type: protocol.BlockToolUse, ToolUseID: "tool_1", ToolName: "echo", Input: map[string]any{"text": "work"},
 			}}},
-			Usage: TokenUsage{InputTokens: 3, OutputTokens: 2},
+			Usage: llm.Usage{InputTokens: 3, OutputTokens: 2},
 		}},
 	}}
-	registry := NewRegistry()
-	registry.Register(ToolSpec{Name: "echo"}, func(context.Context, any) (string, error) { return "done", nil })
+	registry := tool.NewRegistry()
+	registry.Register(tool.Spec{Name: "echo"}, func(context.Context, any) (string, error) { return "done", nil })
 	runner := NewRunner(model, registry, nil, "system", WithMaxTurns(1))
 	defer runner.Close()
 
@@ -219,5 +197,36 @@ func TestRunnerReturnsControlAtGlobalTurnLimit(t *testing.T) {
 	}
 	if result.Usage.Total() != 5 {
 		t.Fatalf("unexpected usage: %#v", result.Usage)
+	}
+}
+
+func testContext(t *testing.T, model llm.Model) RunnerOption {
+	t.Helper()
+	return WithContextManager(agentctx.New(agentctx.Config{WorkDir: t.TempDir(), Model: model, SystemPrompt: "system"}))
+}
+
+func TestRunnerDoesNotCommitUnfinishedToolUse(t *testing.T) {
+	partial := llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Blocks: []protocol.ContentBlock{{Type: protocol.BlockToolUse, ToolUseID: "partial", ToolName: "echo"}}}, StopReason: "max_tokens"}
+	model := &scriptedModel{results: []scriptedModelResult{{response: partial}, {response: partial}}}
+	registry := tool.NewRegistry()
+	registry.Register(tool.Spec{Name: "echo"}, func(context.Context, any) (string, error) { t.Fatal("partial tool must not execute"); return "", nil })
+	runner := NewRunner(model, registry, nil, "system", testContext(t, model))
+	defer runner.Close()
+	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "go"}})
+	if !errors.Is(err, ErrResponseTruncated) || len(result.Messages) != 1 {
+		t.Fatalf("unfinished tool leaked into history: %#v, %v", result, err)
+	}
+}
+
+func TestRunnerReturnsAuthoritativeBlockText(t *testing.T) {
+	model := &scriptedModel{results: []scriptedModelResult{
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "stale cache", Blocks: []protocol.ContentBlock{{Type: protocol.BlockText, Text: "visible answer"}}}}},
+		{response: llm.Response{Message: protocol.Message{Role: protocol.RoleAssistant, Content: "[]"}}},
+	}}
+	runner := NewRunner(model, tool.NewRegistry(), nil, "system", testContext(t, model))
+	defer runner.Close()
+	result, err := runner.Run(context.Background(), []protocol.Message{{Role: protocol.RoleUser, Content: "go"}})
+	if err != nil || result.Output != "visible answer" {
+		t.Fatalf("output = %q, %v", result.Output, err)
 	}
 }

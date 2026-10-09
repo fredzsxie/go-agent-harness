@@ -7,9 +7,11 @@ import (
 
 	"go-agent-harness/internal/agent"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/llm"
 	"go-agent-harness/internal/logger"
 	"go-agent-harness/internal/prompt"
 	"go-agent-harness/internal/protocol"
+	"go-agent-harness/internal/tool"
 )
 
 const maxTurns = 30
@@ -18,7 +20,7 @@ type Manager struct {
 	worker *agent.Worker
 }
 
-func New(model agent.Model, registry *agent.Registry, hookManager *hooks.Manager) *Manager {
+func New(model llm.Model, registry *tool.Registry, hookManager *hooks.Manager) *Manager {
 	if hookManager == nil {
 		hookManager = hooks.NewManager()
 	}
@@ -40,6 +42,9 @@ func (m *Manager) RunTask(ctx context.Context, input any) (string, error) {
 	return m.spawn(ctx, description)
 }
 
+// spawn 对应 s06：每次委派创建新历史，只把最终摘要作为父 Agent 的一个 tool_result 返回。
+// 文件系统与父 Agent 共享，隔离的是消息和工具权限；它不是沙箱，也不是 s13 的持久 Teammate。
+// 受限工具集合由 app 注入，不复制主 Agent 的 Memory、Cron、MCP 或递归委派能力。
 func (m *Manager) spawn(ctx context.Context, description string) (string, error) {
 	logger.Info("[Subagent] spawned")
 
@@ -71,7 +76,7 @@ func (m *Manager) spawn(ctx context.Context, description string) (string, error)
 		})
 	}
 
-	result := agent.LatestAssistantText(messages)
+	result := protocol.LatestAssistantText(messages)
 	if strings.TrimSpace(result) == "" {
 		if finished {
 			result = "(no summary)"
